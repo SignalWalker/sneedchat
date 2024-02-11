@@ -1,0 +1,9 @@
+[package]
+name = "sneedchat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "^0.10" }
+rexa = { path = "/home/ash/projects/lib/rexa", features = [] }
+syrup = { path = "/home/ash/projects/lib/rexa/lib/syrup", features = [] }
