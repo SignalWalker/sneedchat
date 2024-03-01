@@ -47,7 +47,17 @@
           ];
           env.PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.sqlite.dev}/lib/pkgconfig";
 
-          LD_LIBRARY_PATH = std.concatStringsSep ":" ["${pkgs.sqlite.out}/lib" "${pkgs.openssl.out}/lib"];
+          shellHook = let
+            extraLdPaths = std.concatStringsSep ":" [
+              "${pkgs.sqlite.out}/lib"
+              "${pkgs.openssl.out}/lib"
+              "${pkgs.wayland.out}/lib"
+              "${pkgs.libxkbcommon.out}/lib"
+              "${pkgs.vulkan-loader.out}/lib"
+            ];
+          in ''
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${extraLdPaths}"
+          '';
         });
       });
     };

@@ -4,6 +4,57 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "^0.10" }
-rexa = { path = "/home/ash/projects/lib/rexa", features = [] }
+# meta
+tracing = "^0.1"
+tracing-subscriber = { version = "^0.3", features = [
+  "time",
+  "env-filter",
+  "parking_lot",
+  "local-time",
+  "json",
+] }
+time = { version = "^0.3", features = ["formatting", "local-offset", "macros"] }
+
+# chat
+ed25519-dalek = { version = "^2.1", features = ["rand_core"] }
+uuid = { version = "^1.7", features = ["fast-rng", "v4"] }
+rand = { version = "^0.8" }
+dashmap = { version = "^5.5" }
+
+# captp
+rexa = { path = "/home/ash/projects/lib/rexa", default-features = false, features = [
+  "tokio",
+  "extra_diagnostics",
+] }
 syrup = { path = "/home/ash/projects/lib/rexa/lib/syrup", features = [] }
+futures = { version = "^0.3" }
+tokio = { version = "^1.36", features = [
+  "rt-multi-thread",
+  "net",
+  "time",
+  "sync",
+  "signal",
+  "parking_lot",
+  "tracing",
+  "macros",
+] }
+# smol = { version = "^2" }
+
+# gui
+clap = { version = "^4.5", features = ["derive", "env"] }
+## iced
+# iced = { git = "https://github.com/iced-rs/iced", branch = "master", features = [
+#   "wgpu",
+#   "tokio",
+#   "system",
+#   "advanced",
+# ], optional = true }
+## egui
+# egui = { version = "^0.26", features = [ "accesskit", "rayon", "serde", "log", "color-hex" ], optional = true }
+# egui_extras = { version = "^0.26", optional = true }
+# eframe = { version = "^0.26", features = ["wgpu"], optional = true }
+
+[features]
+default = []
+iced = []
+# egui = [ "dep:eframe", "dep:egui_extras", "dep:egui" ]
