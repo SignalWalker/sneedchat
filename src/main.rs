@@ -633,6 +633,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             username: String,
             local_id: uuid::Uuid,
         ) -> Result<(), Box<dyn std::error::Error>> {
+            let time_offset = time::UtcOffset::current_local_offset().unwrap_or_else(|e| {
+                tracing::warn!(reason = %e, "couldn't get local time offset");
+                time::UtcOffset::UTC
+            });
+            let time_format = time::macros::format_description!("[hour]:[minute]:[second]");
+
             let mut tasks = tokio::task::JoinSet::new();
 
             let mut users = HashMap::<uuid::Uuid, TcpIpUser>::new();
@@ -721,7 +727,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // }
                     SneedEvent::RecvMessage(channel_id, msg) => {
                         let user = users.get(&channel_id).unwrap();
-                        println!("[{}] {msg}", user.name);
+                        let time = time::OffsetDateTime::now_utc()
+                            .to_offset(time_offset)
+                            .format(&time_format)
+                            .unwrap();
+                        println!("[{time}][{}] {msg}", user.name);
                     }
                     SneedEvent::SetName(channel_id, name) => {
                         tracing::trace!(%name, %channel_id, "update username");
@@ -732,7 +742,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let outbox = entry.value();
                             outbox.message(&msg).await?;
                         }
-                        println!("[{username}] {msg}");
+                        let time = time::OffsetDateTime::now_utc()
+                            .to_offset(time_offset)
+                            .format(&time_format)
+                            .unwrap();
+                        println!("[{time}][{username}] {msg}");
                     }
                     SneedEvent::Exit => {
                         for entry in outboxes.iter() {
