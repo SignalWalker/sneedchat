@@ -24,7 +24,10 @@ dashmap = { version = "^5.5" }
 # captp
 rexa = { path = "/home/ash/projects/lib/rexa", default-features = false, features = [
   "tokio",
-  "extra_diagnostics",
+  "extra-diagnostics",
+  "netlayer-datastream",
+  "netlayer-onion",
+  "netlayer-mock",
 ] }
 syrup = { path = "/home/ash/projects/lib/rexa/lib/syrup", features = [] }
 futures = { version = "^0.3" }

@@ -42,9 +42,9 @@ pub fn initialize_tracing(log_filter: impl AsRef<str>, log_format: LogFormat) {
     }
 }
 
-fn parse_path(path: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(PathBuf::from(path).canonicalize()?)
-}
+// fn parse_path(path: &str) -> Result<PathBuf, std::io::Error> {
+//     PathBuf::from(path).canonicalize()
+// }
 
 #[derive(Parser, Debug)]
 #[command(version, author, about)]

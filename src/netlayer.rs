@@ -1,366 +1,598 @@
-use ed25519_dalek::VerifyingKey;
-// use iced::Subscription;
+use futures::{future::BoxFuture, TryFutureExt};
 use rexa::{
-    captp::{
-        msg::{DescImport, DescImportObject, OpAbort, OpDeliver, OpDeliverOnly, Operation},
-        CapTpSession, CapTpSessionManager, Delivery, SwissRegistry,
-    },
-    locator::NodeLocator,
+    async_compat::{AsyncRead, AsyncWrite},
+    captp::{AbstractCapTpSession, BootstrapEvent, CapTpSession, Event},
     netlayer::Netlayer,
 };
-use std::{
-    hash::Hash,
-    net::SocketAddr,
-    sync::{atomic::AtomicU64, Arc},
+use rexa::{
+    captp::{object::RemoteObject, RecvError},
+    locator::NodeLocator,
 };
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
+use syrup::{FromSyrupItem, Item};
 use tokio::{
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpListener, TcpStream,
-    },
-    sync::Mutex,
+    sync::{mpsc, oneshot, watch, Notify},
+    task::JoinSet,
 };
 
-// use crate::{chat::SessionManager, gui::MessageTask};
+pub type EventSender = tokio::sync::mpsc::UnboundedSender<SneedEvent>;
+pub type EventReceiver = tokio::sync::mpsc::UnboundedReceiver<SneedEvent>;
+pub type Promise<V> = tokio::sync::oneshot::Receiver<V>;
+pub type Resolver<V> = tokio::sync::oneshot::Sender<V>;
+pub type Swiss = Vec<u8>;
+pub type Outboxes = Arc<dashmap::DashMap<uuid::Uuid, Outbox>>;
+// type TcpIpSession = CapTpSession<
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Reader,
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Writer,
+// >;
+// type TcpIpSneedEvent = SneedEvent<
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Reader,
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Writer,
+// >;
+// type TcpIpUser = User<
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Reader,
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Writer,
+// >;
+// type TcpIpChannel = Channel<
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Reader,
+//     <netlayer::TcpIpNetlayer as rexa::netlayer::Netlayer>::Writer,
+// >;
 
-pub struct TcpIpNetlayer {
-    listener: TcpListener,
-    manager: Mutex<CapTpSessionManager<OwnedReadHalf, OwnedWriteHalf>>,
+#[derive(Clone)]
+pub struct User {
+    pub session: Arc<dyn AbstractCapTpSession + Send + Sync + 'static>,
+    pub id: uuid::Uuid,
+    pub name: String,
 }
 
-impl std::fmt::Debug for TcpIpNetlayer {
+impl std::fmt::Debug for User {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TcpIpNetlayer")
-            .field(
-                "locator",
-                &syrup::ser::to_pretty(&self.locator::<String, String>().unwrap()),
-            )
+        f.debug_struct("User")
+            .field("id", &self.id)
+            .field("name", &self.name)
             .finish_non_exhaustive()
     }
 }
 
-impl rexa::netlayer::Netlayer for TcpIpNetlayer {
-    type Reader = tokio::net::tcp::OwnedReadHalf;
-    type Writer = tokio::net::tcp::OwnedWriteHalf;
-    type Error = std::io::Error;
-
-    #[tracing::instrument(fields(locator = syrup::ser::to_pretty(&locator).unwrap()))]
-    async fn connect<HintKey: syrup::Serialize, HintValue: syrup::Serialize>(
-        &self,
-        locator: rexa::locator::NodeLocator<HintKey, HintValue>,
-    ) -> Result<rexa::captp::CapTpSession<Self::Reader, Self::Writer>, Self::Error> {
-        let addr = locator.designator.parse::<SocketAddr>();
-        let (reader, writer) = TcpStream::connect(addr.unwrap()).await?.into_split();
-        self.manager
-            .lock()
-            .await
-            .init_session(reader, writer)
-            .and_connect(self.locator::<String, String>()?)
-            .await
+impl User {
+    pub fn new(
+        local_profile: Profile,
+        session: Arc<dyn AbstractCapTpSession + Send + Sync + 'static>,
+        id: uuid::Uuid,
+        ev_pipe: EventSender,
+    ) -> (Self, Arc<Channel>) {
+        (
+            Self {
+                session,
+                id,
+                name: "<Unknown>".into(),
+            },
+            Arc::new(Channel {
+                profile: local_profile,
+                id,
+                ev_pipe,
+                sessions: Arc::default(),
+            }),
+        )
     }
 
-    #[tracing::instrument()]
-    async fn accept(
-        &self,
-    ) -> Result<rexa::captp::CapTpSession<Self::Reader, Self::Writer>, Self::Error> {
-        let (reader, writer) = self.listener.accept().await?.0.into_split();
-        self.manager
-            .lock()
-            .await
-            .init_session(reader, writer)
-            .and_accept(self.locator::<String, String>()?)
-            .await
+    // async fn fetch(
+    //     &self,
+    //     swiss: &[u8],
+    // ) -> Result<impl std::future::Future<Output = Result<u64, syrup::Item>>, SendError>
+    // where
+    //     Writer: AsyncWrite + Unpin,
+    // {
+    //     self.session
+    //         .clone()
+    //         .get_remote_bootstrap()
+    //         .fetch(swiss)
+    //         .await
+    // }
+}
+
+pub struct Channel {
+    profile: Profile,
+    id: uuid::Uuid,
+    ev_pipe: EventSender,
+    sessions:
+        Arc<tokio::sync::RwLock<Vec<(u64, Arc<dyn AbstractCapTpSession + Send + Sync + 'static>)>>>,
+}
+
+impl std::fmt::Debug for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Channel")
+            .field("profile", &self.profile)
+            .field("id", &self.id)
+            // .field("sessions", &self.sessions)
+            .finish_non_exhaustive()
     }
 }
 
-impl TcpIpNetlayer {
-    pub fn events(
-        &self,
-    ) -> impl futures::stream::Stream<Item = Result<rexa::captp::Event, rexa::captp::RecvError>> + '_
-    {
-        use futures::stream::{Stream, StreamExt};
-        async fn filter<Reader, Writer, Error>(
-            acc_res: Result<CapTpSession<Reader, Writer>, Error>,
-        ) -> Option<impl Stream<Item = Result<rexa::captp::Event, rexa::captp::RecvError>>>
-        where
-            Writer: rexa::async_compat::AsyncWrite + Send + Unpin + 'static,
-            Reader: rexa::async_compat::AsyncRead + Send + Unpin + 'static,
-        {
-            match acc_res {
-                Ok(session) => Some(session.into_event_stream()),
-                Err(_) => None,
-            }
-        }
-        let stream = self.stream();
-        let stream = stream.filter_map(filter);
-        stream.flatten_unordered(None)
-    }
-
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, std::io::Error> {
-        self.listener.local_addr()
-    }
-
-    pub fn locator<HKey, HVal>(&self) -> Result<NodeLocator<HKey, HVal>, std::io::Error> {
-        Ok(NodeLocator::new(
-            self.local_addr()?.to_string(),
-            "tcpip".to_owned(),
-        ))
-    }
-
-    pub async fn bind(addrs: impl tokio::net::ToSocketAddrs) -> Result<Self, std::io::Error> {
-        Ok(Self {
-            listener: TcpListener::bind(addrs).await?,
-            manager: Mutex::new(CapTpSessionManager::new()),
-        })
-    }
-}
-
-// impl TcpIpNetlayer<TcpListener, TcpStream> {
-// pub fn subscription(
-//     self: std::sync::Arc<Self>,
-// ) -> Result<iced::Subscription<Result<CapTpSession<TcpStream>, std::io::Error>>, std::io::Error>
-// {
-//     async fn accept(
-//         nl: std::sync::Arc<TcpIpNetlayer<TcpListener, TcpStream>>,
-//     ) -> (
-//         Result<CapTpSession<TcpStream>, std::io::Error>,
-//         std::sync::Arc<TcpIpNetlayer<TcpListener, TcpStream>>,
-//     ) {
-//         (nl.accept().await, nl)
-//     }
-//     Ok(iced::subscription::unfold(self.local_addr()?, self, accept))
-// }
-
-// pub fn event_subscription(
-//     self: Arc<Self>,
-//     manager: Arc<crate::chat::SessionManager>,
-//     // registry: Arc<SwissRegistry<<Self as Netlayer>::Socket>>, // chat: Arc<crate::chat::ChatManager>,
-//     // exports: Arc<ExportManager<TcpPipe>>,
-// ) -> Subscription<rexa::captp::Event> {
-//     struct Recipe {
-//         nl: Arc<TcpIpNetlayer<TcpListener, TcpStream>>,
-//     }
-//     impl iced::advanced::subscription::Recipe for Recipe {
-//         type Output = rexa::captp::Event;
-//
-//         fn hash(&self, state: &mut iced::advanced::Hasher) {
-//             std::any::TypeId::of::<Self>().hash(state);
-//         }
-//
-//         fn stream(
-//             self: Box<Self>,
-//             _: iced::advanced::subscription::EventStream,
-//         ) -> iced::advanced::graphics::futures::BoxStream<Self::Output> {
-//             use futures::StreamExt;
-//             self.nl.events().boxed()
-//         }
-//     }
-//     Subscription::from_recipe(Recipe { nl: self })
-// }
-// }
-
-pub struct CapTpRecipe<Nl: Netlayer> {
-    netlayer: Arc<Nl>,
-    manager: Arc<crate::chat::SessionManager>,
-    // chat: Arc<crate::chat::ChatManager>,
-    // registry: Arc<SwissRegistry<Nl::Socket>>,
-    // exports: Arc<ExportManager<TcpPipe>>,
-}
-
-impl<Nl: Netlayer> std::clone::Clone for CapTpRecipe<Nl> {
+impl std::clone::Clone for Channel {
     fn clone(&self) -> Self {
         Self {
-            netlayer: self.netlayer.clone(),
-            manager: self.manager.clone(),
-            // chat: self.chat.clone(),
-            // registry: self.registry.clone(),
-            // exports: self.exports.clone(),
+            profile: self.profile.clone(),
+            id: self.id,
+            ev_pipe: self.ev_pipe.clone(),
+            sessions: self.sessions.clone(),
         }
     }
 }
 
-// #[derive(Debug)]
-// pub struct ExportManager<Value> {
-//     registry: Arc<SwissRegistry<Arc<Value>>>,
-//     map: dashmap::DashMap<u64, Arc<Value>>,
-//     swiss_map: dashmap::DashMap<Vec<u8>, u64>,
-//     current_key: AtomicU64,
-// }
-//
-// impl<V> ExportManager<V> {
-//     pub fn new(registry: Arc<SwissRegistry<Arc<V>>>) -> Self {
-//         Self {
-//             registry,
-//             map: Default::default(),
-//             swiss_map: Default::default(),
-//             current_key: 1.into(), // skip over 0 bc that's the bootstrap key
-//         }
-//     }
-//     fn next_key(&self) -> u64 {
-//         self.current_key
-//             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-//     }
-//     fn fetch_exported(&self, swiss: &[u8]) -> Option<(u64, Arc<V>)> {
-//         self.swiss_map
-//             .get(swiss)
-//             .and_then(|pos| self.get(&*pos).map(|v| (*pos, v.clone())))
-//     }
-//     pub fn fetch(&self, swiss: &[u8]) -> Option<(u64, Arc<V>)> {
-//         self.fetch_exported(swiss)
-//             .or_else(|| match self.registry.get(swiss) {
-//                 Some(v) => {
-//                     let key = self.next_key();
-//                     self.map.insert(key, v.clone());
-//                     self.swiss_map.insert(swiss.to_owned(), key);
-//                     Some((key, v.clone()))
-//                 }
-//                 None => None,
-//             })
-//     }
-//
-//     pub fn get<'s>(
-//         &'s self,
-//         position: &u64,
-//     ) -> Option<dashmap::mapref::one::Ref<'s, u64, Arc<V>>> {
-//         self.map.get(position)
-//     }
-// }
+impl rexa::captp::object::Object for Channel {
+    fn deliver_only(
+        &self,
+        args: Vec<syrup::Item>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        tracing::debug!("channel::deliver_only");
+        let mut args = args.into_iter();
+        match args.next() {
+            Some(syrup::Item::Symbol(id)) => match id.as_str() {
+                "message" => match args.next() {
+                    Some(syrup::Item::String(msg)) => {
+                        self.ev_pipe.send(SneedEvent::RecvMessage(self.id, msg))?;
+                        Ok(())
+                    }
+                    Some(s) => Err(format!("invalid message text: {s:?}").into()),
+                    None => Err("missing message text".into()),
+                },
+                "set_name" => match args.next() {
+                    Some(syrup::Item::String(name)) => {
+                        self.ev_pipe.send(SneedEvent::SetName(self.id, name))?;
+                        Ok(())
+                    }
+                    Some(s) => Err(format!("invalid username: {s:?}").into()),
+                    None => Err("missing username".into()),
+                },
+                id => Err(format!("unrecognized channel function: {id}").into()),
+            },
+            Some(s) => Err(format!("invalid deliver_only argument: {s:?}").into()),
+            None => Err("missing deliver_only arguments".into()),
+        }
+    }
 
-pub struct Inbox<Reader, Writer> {
+    fn deliver<'s>(
+        &'s self,
+        args: Vec<syrup::Item>,
+        resolver: rexa::captp::GenericResolver,
+    ) -> BoxFuture<'s, Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>> {
+        use futures::FutureExt;
+        async move {
+            tracing::debug!("channel::deliver");
+            let mut args = args.into_iter();
+            match args.next() {
+                Some(syrup::Item::Symbol(id)) => match id.as_str() {
+                    "get_profile" => resolver
+                        .fulfill(
+                            [&self.profile],
+                            None,
+                            rexa::captp::msg::DescImport::Object(0.into()),
+                        )
+                        .await
+                        .map_err(From::from),
+                    id => Err(format!("unrecognized channel function: {id}").into()),
+                },
+                Some(s) => Err(format!("invalid deliver argument: {s:?}").into()),
+                None => Err("missing deliver arguments".into()),
+            }
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct SyrupUuid(uuid::Uuid);
+
+impl<'input> syrup::Deserialize<'input> for SyrupUuid {
+    fn deserialize<D: syrup::de::Deserializer<'input>>(de: D) -> Result<Self, D::Error> {
+        Ok(Self(uuid::Uuid::from_bytes(
+            syrup::Bytes::<[u8; 16]>::deserialize(de)?.0,
+        )))
+    }
+}
+
+impl syrup::Serialize for SyrupUuid {
+    fn serialize<Ser: syrup::ser::Serializer>(&self, s: Ser) -> Result<Ser::Ok, Ser::Error> {
+        syrup::Bytes::<&[u8]>(self.0.as_bytes()).serialize(s)
+    }
+}
+
+impl From<uuid::Uuid> for SyrupUuid {
+    fn from(value: uuid::Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&uuid::Uuid> for SyrupUuid {
+    fn from(value: &uuid::Uuid) -> Self {
+        Self(*value)
+    }
+}
+
+impl From<SyrupUuid> for uuid::Uuid {
+    fn from(value: SyrupUuid) -> Self {
+        value.0
+    }
+}
+
+#[derive(Debug, Clone, syrup::Serialize, syrup::Deserialize)]
+pub struct Profile {
+    #[syrup(as = SyrupUuid)]
+    pub id: uuid::Uuid,
+    pub username: String,
+}
+
+pub struct Outbox {
+    base: RemoteObject,
+}
+
+impl std::fmt::Debug for Outbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Outbox").field("base", &self.base).finish()
+    }
+}
+
+impl Outbox {
+    pub fn new(base: RemoteObject) -> Self {
+        Self { base }
+    }
+
+    #[tracing::instrument(level = "debug", fields(name = name.as_ref()))]
+    pub async fn set_username(&self, name: impl AsRef<str>) -> Result<(), rexa::captp::SendError> {
+        tracing::debug!("outbox::set_username");
+        self.base.call_only("set_name", &[name.as_ref()]).await
+    }
+
+    #[tracing::instrument(level = "debug", fields(msg = msg.as_ref()))]
+    pub async fn message(&self, msg: impl AsRef<str>) -> Result<(), rexa::captp::SendError> {
+        tracing::debug!("outbox::message");
+        self.base.call_only("message", &[msg.as_ref()]).await
+    }
+
+    #[tracing::instrument(level = "debug")]
+    pub async fn get_profile(
+        &self,
+    ) -> Result<Profile, Box<dyn std::error::Error + Send + Sync + 'static>> {
+        tracing::debug!("outbox::get_profile");
+        match self
+            .base
+            .call_and::<&str>("get_profile", &[])
+            .await
+            .unwrap()
+            .await?
+        {
+            Ok(res) => {
+                let mut args = res.into_iter();
+                let profile = match args.next() {
+                    Some(item) => match Profile::from_syrup_item(item) {
+                        Ok(p) => p,
+                        Err(_) => todo!(),
+                    },
+                    _ => todo!(),
+                };
+                Ok(profile)
+            }
+            Err(reason) => todo!(),
+        }
+    }
+
+    // async fn abort(
+    //     &self,
+    //     reason: impl Into<rexa::captp::msg::OpAbort>,
+    // ) -> Result<(), rexa::captp::SendError>
+    // where
+    //     Writer: AsyncWrite + Unpin,
+    // {
+    //     tracing::debug!("outbox::abort");
+    //     match self.session.clone().abort(reason).await {
+    //         Ok(_) => Ok(()),
+    //         Err(SendError::SessionAborted(_) | SendError::SessionAbortedLocally) => Ok(()),
+    //         Err(e) => Err(e),
+    //     }
+    // }
+}
+
+pub enum SneedEvent {
+    // NewConnection(CapTpSession<Reader, Writer>),
+    Fetch(
+        Arc<dyn AbstractCapTpSession + Send + Sync + 'static>,
+        Swiss,
+        Resolver<Arc<Channel>>,
+    ),
+    SetName(uuid::Uuid, String),
+    RecvMessage(uuid::Uuid, String),
+    SendMessage(String),
+    Connect(NodeLocator<String, syrup::Item>),
+    /// Emitted on ctrl+c
+    Exit,
+}
+
+impl std::fmt::Debug for SneedEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fetch(_, arg1, arg2) => f.debug_tuple("Fetch").field(arg1).field(arg2).finish(),
+            Self::SetName(arg0, arg1) => f.debug_tuple("SetName").field(arg0).field(arg1).finish(),
+            Self::RecvMessage(arg0, arg1) => f
+                .debug_tuple("RecvMessage")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
+            Self::SendMessage(arg0) => f.debug_tuple("SendMessage").field(arg0).finish(),
+            Self::Exit => write!(f, "Exit"),
+            Self::Connect(locator) => write!(f, "Connect({locator:?})"),
+        }
+    }
+}
+
+#[tracing::instrument(skip(event_pipe))]
+pub async fn manage_session<Reader, Writer>(
     session: CapTpSession<Reader, Writer>,
-    queue: tokio::sync::mpsc::UnboundedReceiver<Delivery>,
+    event_pipe: EventSender,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
+where
+    Reader: AsyncRead + Unpin + Send + 'static,
+    Writer: AsyncWrite + Unpin + Send + 'static,
+{
+    use rexa::captp::FetchResolver;
+    #[tracing::instrument(skip(resolver, registry, event_pipe), fields(swiss = rexa::hash(&swiss)))]
+    async fn respond_to_fetch<Reader, Writer>(
+        swiss: Swiss,
+        resolver: FetchResolver,
+        registry: &mut HashMap<Swiss, u64>,
+        event_pipe: &EventSender,
+        session: &CapTpSession<Reader, Writer>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
+    where
+        Reader: AsyncRead + Unpin + Send + 'static,
+        Writer: AsyncWrite + Unpin + Send + 'static,
+    {
+        if let Some(&pos) = registry.get(&swiss) {
+            resolver.fulfill(pos).await?;
+        } else {
+            let (sender, promise) = tokio::sync::oneshot::channel();
+            event_pipe.send(SneedEvent::Fetch(session.as_dyn(), swiss.clone(), sender))?;
+            tracing::trace!("awaiting promise response");
+            let obj = promise.await?;
+            let pos = session.export(obj.clone());
+            obj.sessions.write().await.push((pos, session.as_dyn()));
+            registry.insert(swiss, pos);
+            tracing::trace!("fulfilling promise");
+            resolver.fulfill(pos).await?;
+            // exports.insert(pos, obj);
+        }
+        Ok(())
+    }
+    async fn inner<Reader, Writer>(
+        session: CapTpSession<Reader, Writer>,
+        event_pipe: EventSender,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
+    where
+        Reader: AsyncRead + Send + Unpin + 'static,
+        Writer: AsyncWrite + Send + Unpin + 'static,
+    {
+        let mut registry = HashMap::<Vec<u8>, u64>::new();
+        // let mut exports = HashMap::<u64, Arc<Channel<Reader, Writer>>>::new();
+        loop {
+            tracing::trace!("awaiting captp event");
+            let event = match session.recv_event().await {
+                Ok(ev) => ev,
+                Err(RecvError::SessionAborted(_) | RecvError::SessionAbortedLocally) => {
+                    tracing::warn!("unexpected session abort");
+                    break Ok(());
+                }
+                Err(e) => {
+                    tracing::error!("{e}");
+                    return Err(e.into());
+                }
+            };
+            tracing::debug!(?event, "received captp event");
+            match event {
+                Event::Bootstrap(BootstrapEvent::Fetch { swiss, resolver }) => {
+                    respond_to_fetch(swiss, resolver, &mut registry, &event_pipe, &session).await?
+                }
+                Event::Abort(reason) => {
+                    tracing::info!(reason, "session aborted");
+                    break Ok(());
+                }
+            }
+        }
+    }
+    tracing::debug!("managing session");
+    inner(session, event_pipe).await
 }
 
-impl<Reader, Writer> Inbox<Reader, Writer> {
-    pub async fn recv(&mut self) -> Option<Delivery> {
-        self.queue.recv().await
+pub struct NetlayerManager {
+    tasks: JoinSet<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    layers: HashMap<String, mpsc::UnboundedSender<ConnectRequest>>,
+}
+
+impl NetlayerManager {
+    pub fn new() -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            layers: HashMap::new(),
+        }
+    }
+
+    pub fn register<Nl: Netlayer>(
+        &mut self,
+        transport: String,
+        nl: Nl,
+        event_pipe: EventSender,
+        end_flag: watch::Receiver<bool>,
+    ) -> mpsc::UnboundedSender<ConnectRequest>
+    where
+        Nl: Send + 'static,
+        Nl::Reader: AsyncRead + Send + Unpin,
+        Nl::Writer: AsyncWrite + Send + Unpin,
+        Nl::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.layers.insert(transport.clone(), sender.clone());
+        let locator = nl.locator::<String, String>();
+        self.tasks
+            .spawn(manage_netlayer(nl, event_pipe, end_flag, receiver).map_err(From::from));
+        tracing::info!(%transport, %locator, "registered netlayer");
+        sender
+    }
+
+    pub fn request_connect(
+        &self,
+        locator: NodeLocator<String, syrup::Item>,
+    ) -> Result<
+        impl Future<Output = Result<ConnectResult, oneshot::error::RecvError>>,
+        mpsc::error::SendError<ConnectRequest>,
+    > {
+        let Some(nl) = self.layers.get(&locator.transport) else {
+            todo!("unregistered transport: {}", locator.transport)
+        };
+        let (sender, receiver) = oneshot::channel();
+        nl.send((locator, sender))?;
+        Ok(receiver)
     }
 }
 
-impl<Reader, Writer> futures::stream::Stream for Inbox<Reader, Writer> {
-    type Item = Delivery;
+pub type ConnectResult = Result<Arc<dyn AbstractCapTpSession + Send + Sync + 'static>, ()>;
+pub type ConnectRequest = (
+    NodeLocator<String, syrup::Item>,
+    oneshot::Sender<ConnectResult>,
+);
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.queue.poll_recv(cx)
+#[tracing::instrument(fields(nl = %nl.locator::<String, String>()), skip(event_pipe, end_flag, connect_reqs))]
+pub async fn manage_netlayer<Nl: Netlayer>(
+    nl: Nl,
+    event_pipe: EventSender,
+    mut end_flag: tokio::sync::watch::Receiver<bool>,
+    mut connect_reqs: mpsc::UnboundedReceiver<ConnectRequest>,
+) -> Result<(), Nl::Error>
+where
+    Nl::Reader: AsyncRead + Unpin + Send + 'static,
+    Nl::Writer: AsyncWrite + Unpin + Send + 'static,
+    Nl::Error: std::error::Error,
+{
+    tracing::debug!("managing netlayer");
+    let mut session_tasks = JoinSet::new();
+    loop {
+        let session = tokio::select! {
+            session = nl.accept() => {
+                let session = session?;
+                tracing::debug!(?session, "accepted connection");
+                session
+            },
+            Some((locator, res_pipe)) = connect_reqs.recv() => {
+                let session = match nl.connect(&locator).await {
+                    Ok(session) => {
+                        let _ = res_pipe.send(Ok(session.as_dyn()));
+                        session
+                    }
+                    Err(error) => {
+                        tracing::error!(?error, "failed to connect to node");
+                        let _ = res_pipe.send(Err(()));
+                        continue
+                    }
+                };
+                tracing::debug!(?locator, ?session, "connected to node");
+                session
+            },
+            _ = end_flag.changed() => break,
+        };
+        let task_name = format!("manage_session: {session:?}");
+        session_tasks
+            .build_task()
+            .name(&task_name)
+            .spawn(manage_session(session, event_pipe.clone()))
+            .unwrap();
+    }
+    session_tasks.abort_all();
+    while let Some(res) = session_tasks.join_next().await {
+        if let Err(error) = res {
+            tracing::error!("{error}");
+        }
+    }
+    Ok(())
+}
+#[tracing::instrument(skip(ev_pipe))]
+pub fn handle_input(
+    ev_pipe: EventSender,
+) -> Result<std::thread::JoinHandle<Result<(), std::io::Error>>, std::io::Error> {
+    std::thread::Builder::new()
+        .name("handle_input".to_string())
+        .spawn(move || {
+            tracing::debug!("handling input");
+            for msg in std::io::stdin().lines() {
+                let msg = msg?;
+                match msg.as_bytes()[0] {
+                    b'/' if msg.len() > 1 => {
+                        let mut split = msg[1..].split_whitespace();
+                        let cmd = split.next().unwrap();
+                        match cmd {
+                            "connect" => {
+                                let Some(designator) = split.next() else {
+                                    tracing::error!("missing designator");
+                                    continue;
+                                };
+                                ev_pipe
+                                    .send(SneedEvent::Connect(NodeLocator::new(
+                                        designator.to_owned(),
+                                        "tcpip".to_owned(),
+                                    )))
+                                    .unwrap()
+                            }
+                            _ => tracing::error!(
+                                "unrecognized command: {cmd} {}",
+                                split.collect::<String>()
+                            ),
+                        }
+                    }
+                    _ => ev_pipe.send(SneedEvent::SendMessage(msg)).unwrap(),
+                }
+            }
+            Ok(())
+        })
+}
+#[tracing::instrument(skip(ev_pipe))]
+pub async fn signal_watch(
+    ev_pipe: EventSender,
+    mut end_flag: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), std::io::Error> {
+    tokio::select! {
+        signal = tokio::signal::ctrl_c() => {
+            signal?;
+            let _ = ev_pipe.send(SneedEvent::Exit);
+            Ok(())
+        }
+        _ = end_flag.changed() => Ok(())
     }
 }
-
-pub type TcpPipe = tokio::sync::mpsc::UnboundedSender<Delivery>;
-pub type TcpInbox = Inbox<OwnedReadHalf, OwnedWriteHalf>;
-
-// impl futures::stream::Stream for CapTpRecipe<TcpIpNetlayer<TcpListener, TcpStream>> {
-//     type Item = rexa::captp::Event;
-//
-//     fn poll_next(
-//         self: std::pin::Pin<&mut Self>,
-//         cx: &mut std::task::Context<'_>,
-//     ) -> std::task::Poll<Option<Self::Item>> {
-//         todo!()
-//     }
-// }
-
-// impl iced::advanced::subscription::Recipe for CapTpRecipe<TcpIpNetlayer<TcpListener, TcpStream>> {
-//     type Output = crate::gui::Message;
-//
-//     fn hash(&self, state: &mut iced::advanced::Hasher) {
-//         std::any::TypeId::of::<Self>().hash(state)
-//     }
-//
-//     fn stream(
-//         self: Box<Self>,
-//         _: iced::advanced::subscription::EventStream,
-//     ) -> iced::advanced::graphics::futures::BoxStream<Self::Output> {
-//         use crate::gui::Message;
-//         use futures::stream::{self, Stream, StreamExt};
-//         use rexa::captp::Event as CapTpEvent;
-//         struct RecvData {
-//             key: VerifyingKey,
-//             manager: Arc<SessionManager>,
-//             session: CapTpSession<TcpStream>,
-//             // chat: Arc<crate::chat::ChatManager>,
-//             // registry: Arc<SwissRegistry<TcpStream>>,
-//             // exports: Arc<ExportManager<TcpPipe>>,
-//         }
-//         async fn recv(data: RecvData) -> Option<(crate::gui::Message, RecvData)> {
-//             let res = loop {
-//                 match data.session.recv_event().await {
-//                     Ok(CapTpEvent::Bootstrap(b)) => match b {
-//                         rexa::captp::BootstrapEvent::Fetch { swiss, resolver } => {
-//                             todo!()
-//                         }
-//                         _ => todo!(),
-//                     },
-//                     Ok(CapTpEvent::Delivery(del)) => todo!(),
-//                     Ok(CapTpEvent::Abort(reason)) => {
-//                         let key = data.key;
-//                         tracing::info!(reason, id = ?key, "session aborted");
-//                         data.manager.remove(&key);
-//                         return None;
-//                     }
-//                     Err(e) => {
-//                         let key = data.key;
-//                         tracing::error!(error = ?e, id = ?key, "captp error");
-//                         data.manager.remove(&key);
-//                         return None;
-//                     }
-//                 }
-//             };
-//             Some((res, data))
-//         }
-//         type Recipe = CapTpRecipe<TcpIpNetlayer<TcpListener, TcpStream>>;
-//         async fn accept(
-//             recipe: Recipe,
-//         ) -> Option<(impl Stream<Item = crate::gui::Message> + Unpin, Recipe)> {
-//             match recipe.netlayer.accept().await {
-//                 Ok(session) => {
-//                     let key = session.remote_vkey().clone();
-//                     tracing::info!(id = ?key, "accepted connection");
-//                     recipe.manager.insert(key, session.clone());
-//                     Some((
-//                         stream::unfold(
-//                             RecvData {
-//                                 key,
-//                                 manager: recipe.manager.clone(),
-//                                 session,
-//                                 // chat: recipe.chat.clone(),
-//                                 // registry: recipe.registry.clone(),
-//                                 // exports: recipe.exports.clone(),
-//                             },
-//                             recv,
-//                         )
-//                         .boxed(),
-//                         recipe,
-//                     ))
-//                 }
-//                 Err(e) => todo!("handle session accept error: {e:?}"),
-//             }
-//         }
-//         stream::unfold((*self).clone(), accept)
-//             .flatten_unordered(None)
-//             .boxed()
-//     }
-// }
-
-// #[derive(Clone)]
-// #[repr(transparent)]
-// pub struct NetlayerRecipe<Nl>(std::sync::Arc<Nl>);
-//
-// impl iced::advanced::subscription::Recipe
-//     for NetlayerRecipe<TcpIpNetlayer<TcpListener, TcpStream>>
-// {
-//     type Output = CapTpSession<TcpStream>;
-//
-//     fn hash(&self, state: &mut iced::advanced::Hasher) {
-//         self.0.local_addr().unwrap().hash(state)
-//     }
-//
-//     fn stream(
-//         self: Box<Self>,
-//         input: iced::advanced::subscription::EventStream,
-//     ) -> iced::advanced::graphics::futures::BoxStream<Self::Output> {
-//         todo!()
-//     }
-// }
+#[tracing::instrument(skip(username, outboxes, session))]
+pub async fn fetch_outbox(
+    username: String,
+    local_id: uuid::Uuid,
+    remote_id: uuid::Uuid,
+    outboxes: Outboxes,
+    session: Arc<impl AbstractCapTpSession + ?Sized>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    tracing::debug!("fetching outbox");
+    let outbox = match session
+        .into_remote_bootstrap()
+        .fetch(local_id.as_bytes())
+        .await
+        .unwrap()
+        .await
+    {
+        Ok(base) => Outbox { base },
+        Err(reason) => {
+            tracing::error!(?reason, "failed to fetch outbox");
+            // TODO
+            return Err(syrup::ser::to_pretty(&reason).unwrap().into());
+        }
+    };
+    outbox.set_username(username).await.unwrap();
+    tracing::trace!("outbox fetched");
+    outboxes.insert(remote_id, outbox);
+    Ok(())
+}
