@@ -1,21 +1,38 @@
 #[cfg(feature = "iced")]
 mod __iced {
-    use crate::{
-        chat::{ChannelId, ChatManager, Event, SessionManager, UserId},
-        TcpInbox, TcpIpNetlayer, TcpPipe,
-    };
+    use crate::chat::{ChatEvent, ChatManager, SneedEvent};
     use ed25519_dalek::VerifyingKey;
     use iced::{alignment, Command, Length, Padding, Subscription};
     use rexa::{
         captp::{
-            msg::{OpAbort, OpDeliver, OpDeliverOnly, Operation},
+            msg::{OpAbort, OpDeliver, OpDeliverOnly},
             CapTpSession,
         },
         locator::NodeLocator,
         netlayer::Netlayer,
     };
-    use std::{collections::HashMap, sync::Arc};
-    use tokio::net::{TcpListener, TcpStream};
+    use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        sync::mpsc,
+    };
+
+    #[derive(Default, Clone, Debug)]
+    pub struct SneedChatFlags {
+        username: Option<String>,
+        port: u16,
+        remote: Option<SocketAddr>,
+    }
+
+    impl From<crate::cli::Cli> for SneedChatFlags {
+        fn from(args: crate::cli::Cli) -> Self {
+            Self {
+                port: args.port,
+                username: args.username,
+                remote: args.remote,
+            }
+        }
+    }
 
     pub struct MessageTask<'future> {
         task: Arc<std::pin::Pin<Box<dyn futures::Future<Output = ()> + Send + Sync + 'future>>>,
@@ -43,19 +60,21 @@ mod __iced {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub enum Message {
-        Loaded(Result<(), ()>),
-        UsernameChanged(String),
-        LogIn,
+        Loaded(Result<ChatManager, Box<dyn std::error::Error + Send + Sync + 'static>>),
         ShiftFocus(bool),
-        ManagerReady(Result<Arc<ChatManager>, String>),
-        ChatEvent(Event),
-        // Fetch {
-        //     swiss: Vec<u8>,
-        //     resolver: rexa::captp::FetchResolver<TcpStream>,
-        // },
-        SentMessage,
+        ChatEvent(ChatEvent),
+    }
+
+    impl Clone for Message {
+        fn clone(&self) -> Self {
+            match self {
+                Self::ShiftFocus(arg0) => Self::ShiftFocus(arg0.clone()),
+                Self::ChatEvent(ev) => Self::ChatEvent(ev.clone()),
+                _ => todo!(),
+            }
+        }
     }
 
     // impl From<MessageTask<'static>> for Message {
@@ -66,41 +85,52 @@ mod __iced {
 
     pub enum SneedChat {
         Loading,
-        Login {
-            username: String,
-        },
-        LoggingIn {
-            username: String,
+        LoadError {
+            error: Box<dyn std::error::Error + Send + Sync + 'static>,
         },
         LoggedIn {
+            chat_pipe: mpsc::UnboundedSender<SneedEvent>,
             manager: Arc<ChatManager>,
-            netlayer: Arc<TcpIpNetlayer<TcpListener, TcpStream>>,
-            sessions: Arc<SessionManager>,
-            // registry: Arc<SwissRegistry<TcpStream>>,
-            // exports: Arc<ExportManager<TcpPipe>>,
-            current_channel: Option<ChannelId>,
         },
     }
 
     impl SneedChat {
-        fn new(_flags: <Self as iced::Application>::Flags) -> Self {
+        fn new(flags: &<Self as iced::Application>::Flags) -> Self {
             Self::Loading
         }
     }
 
     impl iced::Application for SneedChat {
         type Executor = iced::executor::Default;
-
         type Message = Message;
-
         type Theme = iced::theme::Theme;
-
-        type Flags = ();
+        type Flags = SneedChatFlags;
 
         fn new(flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
             (
-                SneedChat::new(flags),
-                Command::perform(async { Ok(()) }, Message::Loaded),
+                SneedChat::new(&flags),
+                Command::perform(
+                    async move {
+                        let mut builder = ChatManager::builder(uuid::Uuid::new_v4()).with_netlayer(
+                            "tcpip".to_owned(),
+                            rexa::netlayer::datastream::TcpIpNetlayer::bind(
+                                &([0, 0, 0, 0], flags.port).into(),
+                            )
+                            .await?,
+                        );
+                        if let Some(username) = flags.username {
+                            builder = builder.with_username(username);
+                        }
+                        if let Some(designator) = flags.remote {
+                            builder = builder.with_initial_remote(NodeLocator::new(
+                                designator.to_string(),
+                                "tcpip".to_owned(),
+                            ));
+                        }
+                        Ok(builder.build())
+                    },
+                    Message::Loaded,
+                ),
             )
         }
 
@@ -117,67 +147,32 @@ mod __iced {
             }
             match self {
                 SneedChat::Loading => match message {
-                    Message::Loaded(Ok(_)) => {
-                        *self = Self::Login {
-                            username: "".into(),
-                        };
-                        Command::none()
-                    }
-                    Message::Loaded(Err(_)) => todo!(),
-                    _ => Command::none(),
-                },
-                SneedChat::Login { username } => match message {
-                    Message::UsernameChanged(u) => {
-                        *username = u;
-                        Command::none()
-                    }
-                    Message::ShiftFocus(backward) => shift_focus(backward),
-                    Message::LogIn => {
-                        let username = username.clone();
-                        *self = Self::LoggingIn {
-                            username: username.clone(),
-                        };
-                        Command::perform(
-                            async move {
-                                Ok(ChatManager::new(
-                                    Arc::new(
-                                        TcpIpNetlayer::bind("0.0.0.0:0")
-                                            .await
-                                            .map_err(|e| e.to_string())?,
-                                    ),
-                                    username,
-                                ))
-                            },
-                            Message::ManagerReady,
-                        )
-                    }
-                    _ => Command::none(),
-                },
-                SneedChat::LoggingIn { .. } => match message {
-                    Message::ManagerReady(Ok((m, nl))) => {
+                    Message::Loaded(Ok(manager)) => {
+                        let manager = Arc::new(manager);
                         *self = Self::LoggedIn {
-                            manager: m,
-                            netlayer: nl.clone(),
-                            current_channel: None,
-                            sessions: SessionManager::new(),
-                            // registry: Arc::default(),
-                            // exports,
+                            chat_pipe: manager.event_sender().clone(),
+                            manager: manager.clone(),
                         };
                         Command::none()
                     }
-                    Message::ManagerReady(Err(e)) => todo!("handle netlayer binding error: {e}"),
+                    Message::Loaded(Err(error)) => {
+                        *self = Self::LoadError { error };
+                        Command::none()
+                    }
                     _ => Command::none(),
                 },
-                SneedChat::LoggedIn {
-                    manager,
-                    netlayer,
-                    sessions,
-                    // registry,
-                    // exports,
-                    current_channel,
-                } => match message {
+                SneedChat::LoadError { .. } => Command::none(),
+                SneedChat::LoggedIn { chat_pipe, manager } => match message {
                     Message::ShiftFocus(backward) => shift_focus(backward),
-                    Message::SentMessage => Command::none(),
+                    Message::ChatEvent(ev) => match ev {
+                        ChatEvent::RecvMessage {
+                            user,
+                            channel_id,
+                            msg,
+                        } => todo!(),
+                        ChatEvent::UpdateProfile(id) => todo!(),
+                        ChatEvent::Exit => todo!(),
+                    },
                     _ => todo!(),
                 },
                 _ => todo!(),
@@ -196,43 +191,19 @@ mod __iced {
                 .height(Length::Fill)
                 .center_y()
                 .into(),
-                SneedChat::Login { username } => w::container(
-                    w::column![
-                        w::text("Log In").size(50),
-                        w::row![
-                            w::text("Username"),
-                            w::text_input("<Name>", username)
-                                .on_input(Message::UsernameChanged)
-                                .on_submit(Message::LogIn)
-                        ],
-                        w::button("Log In").on_press(Message::LogIn)
-                    ]
-                    .align_items(alignment::Alignment::Center),
+                SneedChat::LoadError { error } => w::container(
+                    w::text(format!("Error: {error}"))
+                        .horizontal_alignment(alignment::Horizontal::Center),
                 )
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .into(),
-                SneedChat::LoggingIn { username } => w::container(
-                    w::text(format!("Logging in as {username}..."))
-                        .horizontal_alignment(alignment::Horizontal::Center)
-                        .size(50),
-                )
-                .into(),
-                SneedChat::LoggedIn {
-                    manager,
-                    netlayer,
-                    sessions,
-                    current_channel,
-                    // registry,
-                    // exports,
-                } => w::container(w::column![
+                SneedChat::LoggedIn { chat_pipe, manager } => w::container(w::column![
                     w::row![w::button("Connect")],
                     w::row![
                         w::column![w::text("Channels")],
                         w::column![w::text("current channel")]
                     ],
-                    w::text(format!(
-                        "Address: {}",
-                        netlayer.locator::<String, String>().unwrap()
-                    ))
                 ])
                 .into(),
                 _ => todo!(),
@@ -251,16 +222,20 @@ mod __iced {
                 }
             });
             match self {
-                SneedChat::Loading | SneedChat::Login { .. } | SneedChat::LoggingIn { .. } => {
-                    keypress
-                }
-                SneedChat::LoggedIn {
-                    netlayer,
-                    sessions,
-                    // registry,
-                    // exports,
-                    ..
-                } => Subscription::batch([todo!(), keypress]),
+                SneedChat::LoggedIn { chat_pipe, manager } => Subscription::batch([
+                    iced::subscription::unfold(
+                        manager.profile.id,
+                        manager.clone(),
+                        |manager| async move {
+                            (
+                                manager.recv_event().await.map(Message::ChatEvent).unwrap(),
+                                manager,
+                            )
+                        },
+                    ),
+                    keypress,
+                ]),
+                _ => keypress,
             }
         }
     }
