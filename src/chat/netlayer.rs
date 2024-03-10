@@ -110,14 +110,14 @@ where
         let _ = event_pipe.send(SneedEvent::NewSession(session.as_dyn()));
         let task_name = format!("manage_session: {session:?}");
         session_tasks
-            .build_task()
-            .name(&task_name)
+            // .build_task()
+            // .name(&task_name)
             .spawn(manage_session(
                 session,
                 event_pipe.clone(),
                 end_flag.clone(),
-            ))
-            .unwrap();
+            ));
+            // .unwrap();
     }
     session_tasks.abort_all();
     while let Some(res) = session_tasks.join_next().await {

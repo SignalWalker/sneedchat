@@ -32,31 +32,62 @@
               cryptography
               stem
             ]);
+          libraries = with pkgs; [
+            sqlite
+            openssl
+            zlib
+            xz
+            # tauri
+            webkitgtk_4_1 # dioxus requires javascriptcoregtk-4-1
+            gtk3
+            gdk-pixbuf
+            glib
+            dbus
+            librsvg
+            # dioxus
+            libsoup_3
+            xdotool
+            pango
+            cairo
+            ## dioxus-cli
+            bzip2
+          ];
+          buildInputs = with pkgs; [
+            sqlite
+            openssl
+            zlib
+            # tauri
+            curl
+            wget
+            dbus
+            glib
+            gtk3
+            libsoup
+            webkitgtk_4_1 # dioxus requires javascriptcoregtk-4-1
+            librsvg
+            # dioxus
+            xdotool
+            pango
+          ];
         in {
           nativeBuildInputs = [
             pkgs.pkg-config
           ];
-          buildInputs = [
-            pkgs.sqlite
-            pkgs.openssl
-            pkgs.zlib
+          buildInputs = buildInputs;
+          packages = with pkgs; [
+            nasm
+            # dioxus-cli
           ];
-          packages = [
-            # python
-            # pkgs.tor
-          ];
-          env.PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.sqlite.dev}/lib/pkgconfig";
 
           shellHook = let
-            extraLdPaths = std.concatStringsSep ":" [
-              "${pkgs.sqlite.out}/lib"
-              "${pkgs.openssl.out}/lib"
-              "${pkgs.wayland.out}/lib"
-              "${pkgs.libxkbcommon.out}/lib"
-              "${pkgs.vulkan-loader.out}/lib"
+            extraLdPaths = pkgs.lib.makeLibraryPath libraries;
+            extraDataDirs = std.concatStringsSep ":" [
+              "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}"
+              "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
             ];
           in ''
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${extraLdPaths}"
+            export LD_LIBRARY_PATH="${extraLdPaths}:$LD_LIBRARY_PATH"
+            export XDG_DATA_DIRS="${extraDataDirs}:$XDG_DATA_DIRS"
           '';
         });
       });

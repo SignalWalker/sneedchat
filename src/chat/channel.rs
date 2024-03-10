@@ -1,94 +1,81 @@
-use crate::chat::{EventSender, Profile, SneedEvent};
-use futures::future::BoxFuture;
-use rexa::captp::AbstractCapTpSession;
-use std::sync::Arc;
+use crate::chat::{Inbox, Outbox, OutboxId, SyrupUuid};
+use rexa::captp::{object::Object, AbstractCapTpSession};
+use std::{collections::HashMap, sync::Arc};
+use tokio::task::JoinSet;
 
-// pub struct Channel {
-//     pub(super) profile: Profile,
-//     pub(super) id: uuid::Uuid,
-//     pub(super) ev_pipe: EventSender,
-//     pub(super) sessions:
-//         Arc<tokio::sync::RwLock<Vec<(u64, Arc<dyn AbstractCapTpSession + Send + Sync + 'static>)>>>,
-// }
+#[derive(syrup::Serialize, syrup::Deserialize)]
+pub struct ChannelListing {
+    #[syrup(as = SyrupUuid)]
+    id: uuid::Uuid,
+    name: Option<String>,
+}
 
-// impl std::fmt::Debug for Channel {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_struct("Channel")
-//             .field("profile", &self.profile)
-//             .field("id", &self.id)
-//             // .field("sessions", &self.sessions)
-//             .finish_non_exhaustive()
-//     }
-// }
-//
-// impl std::clone::Clone for Channel {
-//     fn clone(&self) -> Self {
-//         Self {
-//             profile: self.profile.clone(),
-//             id: self.id,
-//             ev_pipe: self.ev_pipe.clone(),
-//             sessions: self.sessions.clone(),
-//         }
-//     }
-// }
-//
-// impl rexa::captp::object::Object for Channel {
-//     fn deliver_only(
-//         &self,
-//         args: Vec<syrup::Item>,
-//     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-//         tracing::debug!("channel::deliver_only");
-//         let mut args = args.into_iter();
-//         match args.next() {
-//             Some(syrup::Item::Symbol(id)) => match id.as_str() {
-//                 "message" => match args.next() {
-//                     Some(syrup::Item::String(msg)) => {
-//                         self.ev_pipe.send(SneedEvent::RecvMessage(self.id, msg))?;
-//                         Ok(())
-//                     }
-//                     Some(s) => Err(format!("invalid message text: {s:?}").into()),
-//                     None => Err("missing message text".into()),
-//                 },
-//                 "set_name" => match args.next() {
-//                     Some(syrup::Item::String(name)) => {
-//                         self.ev_pipe.send(SneedEvent::SetName(self.id, name))?;
-//                         Ok(())
-//                     }
-//                     Some(s) => Err(format!("invalid username: {s:?}").into()),
-//                     None => Err("missing username".into()),
-//                 },
-//                 id => Err(format!("unrecognized channel function: {id}").into()),
-//             },
-//             Some(s) => Err(format!("invalid deliver_only argument: {s:?}").into()),
-//             None => Err("missing deliver_only arguments".into()),
-//         }
-//     }
-//
-//     fn deliver<'s>(
-//         &'s self,
-//         args: Vec<syrup::Item>,
-//         resolver: rexa::captp::GenericResolver,
-//     ) -> BoxFuture<'s, Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>> {
-//         use futures::FutureExt;
-//         async move {
-//             tracing::debug!("channel::deliver");
-//             let mut args = args.into_iter();
-//             match args.next() {
-//                 Some(syrup::Item::Symbol(id)) => match id.as_str() {
-//                     "get_profile" => resolver
-//                         .fulfill(
-//                             [&self.profile],
-//                             None,
-//                             rexa::captp::msg::DescImport::Object(0.into()),
-//                         )
-//                         .await
-//                         .map_err(From::from),
-//                     id => Err(format!("unrecognized channel function: {id}").into()),
-//                 },
-//                 Some(s) => Err(format!("invalid deliver argument: {s:?}").into()),
-//                 None => Err("missing deliver arguments".into()),
-//             }
-//         }
-//         .boxed()
-//     }
-// }
+pub type ChannelId = uuid::Uuid;
+pub struct Channel {
+    id: ChannelId,
+    pub name: String,
+    inbox: Arc<Inbox>,
+    outboxes: tokio::sync::RwLock<HashMap<OutboxId, Arc<Outbox>>>,
+}
+
+impl std::fmt::Debug for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Channel")
+            .field("id", &self.id)
+            .field("inbox", &self.inbox)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Channel {
+    pub fn new(
+        id: uuid::Uuid,
+        name: String,
+        inbox: Arc<Inbox>,
+        initial_outboxes: HashMap<uuid::Uuid, Arc<Outbox>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            name,
+            inbox,
+            outboxes: initial_outboxes.into(),
+        })
+    }
+
+    pub async fn send_msg(
+        &self,
+        msg: impl AsRef<str>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        let msg = msg.as_ref();
+        let mut send_tasks = JoinSet::new();
+        for outbox in self.outboxes.read().await.values() {
+            send_tasks.spawn(outbox.clone().into_send_msg(msg.to_owned()));
+        }
+        while let Some(res) = send_tasks.join_next().await {
+            res??;
+        }
+        Ok(())
+    }
+}
+
+impl Object for Channel {
+    fn deliver_only(
+        &self,
+        session: &(dyn AbstractCapTpSession + Sync),
+        args: Vec<syrup::Item>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        self.inbox.deliver_only(session, args)
+    }
+
+    fn deliver<'result>(
+        &'result self,
+        session: &'result (dyn AbstractCapTpSession + Sync),
+        args: Vec<syrup::Item>,
+        resolver: rexa::captp::GenericResolver,
+    ) -> futures::prelude::future::BoxFuture<
+        'result,
+        Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>,
+    > {
+        self.inbox.deliver(session, args, resolver)
+    }
+}

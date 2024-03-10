@@ -18,8 +18,11 @@ pub use user::*;
 mod channel;
 pub use channel::*;
 
-// mod outbox;
-// pub use outbox::*;
+mod inbox;
+pub use inbox::*;
+
+mod outbox;
+pub use outbox::*;
 
 mod session;
 pub use session::*;
@@ -29,6 +32,9 @@ pub use netlayer::*;
 
 mod input;
 pub use input::*;
+
+mod portal;
+pub use portal::*;
 
 pub type EventSender = tokio::sync::mpsc::UnboundedSender<SneedEvent>;
 pub type EventReceiver = tokio::sync::mpsc::UnboundedReceiver<SneedEvent>;
