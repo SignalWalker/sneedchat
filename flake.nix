@@ -75,8 +75,8 @@
           ];
           buildInputs = buildInputs;
           packages = with pkgs; [
-            nasm
-            # dioxus-cli
+            nasm # for building dioxus-cli
+            tailwindcss
           ];
 
           shellHook = let

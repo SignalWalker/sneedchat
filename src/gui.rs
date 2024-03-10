@@ -24,6 +24,9 @@ fn App() -> Element {
                     Message { msg: MessageData {
                         username: "Ash".to_owned(), time: time::OffsetDateTime::now_utc(), message: "Message!".to_owned()
                     } }
+                    Message { msg: MessageData {
+                        username: "Amaranth".to_owned(), time: time::OffsetDateTime::now_utc(), message: "Message...".to_owned()
+                    } }
                 }
                 MessageInput {}
             }
