@@ -1,0 +1,81 @@
+[package]
+name = "bonfire-gui"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+bonfire = { path = "../../lib/bonfire" }
+
+serde = { version = "^1", features = ["derive"] }
+
+
+# meta
+tracing.workspace = true
+thiserror.workspace = true
+
+# chat
+ed25519-dalek = { workspace = true, features = ["alloc", "pkcs8"] }
+# uuid.workspace = true
+rand.workspace = true
+# dashmap.workspace = true
+
+# captp
+# syrup.workspace = true
+## async
+futures.workspace = true
+# parking_lot.workspace = true
+
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+clap = { version = "^4.5", features = ["derive", "env"] }
+lazy_static = "^1"
+figment = { version = "^0.10", features = ["toml", "env"] }
+directories = "5.0.1"
+toml = { version = "^0.8", features = ["display"] }
+
+tracing-subscriber = { version = "^0.3", features = [
+  "time",
+  "env-filter",
+  "parking_lot",
+  "local-time",
+  "json",
+] }
+time = { version = "^0.3", features = ["formatting", "local-offset", "macros"] }
+dioxus = { version = "0.5.0-alpha.2", features = ["desktop"] }
+
+rexa = { workspace = true, features = [] }
+rexa-netlayers = { workspace = true, features = ["datastream-tcp"] }
+
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "net",
+  "signal",
+  "parking_lot",
+  "tracing",
+] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "^0.2", features = ["js"] }
+dioxus = { version = "0.5.0-alpha.2", features = ["web"] }
+rexa = { workspace = true, features = [] }
+rexa-netlayers = { workspace = true, features = ["datastream"] }
+tokio = { workspace = true, features = ["rt"] }
+
+figment = { version = "^0.10", features = [] }
+
+wasm-bindgen = { version = "^0.2" }
+web-sys = { version = "^0.3", features = [
+  "Window",
+  "Navigator",
+  "StorageManager",
+] }
+gloo-storage = { version = "^0.3" }
+
+[features]
+default = []
+
+[lints]
+workspace = true

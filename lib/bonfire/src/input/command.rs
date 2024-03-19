@@ -1,4 +1,4 @@
-use crate::chat::{ChannelId, InboxId, OutboxId, PeerKey};
+use crate::{ChannelId, PeerKey};
 use rexa::locator::NodeLocator;
 use std::str::FromStr;
 
@@ -29,17 +29,15 @@ pub enum CommandError {
 
 #[derive(Clone)]
 pub enum Command {
-    SendMessage { mailbox_id: MailboxId, msg: String },
+    SendMessage { channel_id: ChannelId, msg: String },
     Connect(NodeLocator<String, syrup::Item>),
-    SetName(String),
 }
 
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SendMessage { mailbox_id, msg } => write!(f, "`/msg {mailbox_id:?} {msg}`"),
+            Self::SendMessage { channel_id, msg } => write!(f, "`/msg {channel_id:?} {msg}`"),
             Self::Connect(locator) => write!(f, "`/connect {locator:?}`"),
-            Self::SetName(name) => write!(f, "`/setname {name}`"),
         }
     }
 }
@@ -59,12 +57,6 @@ impl FromStr for Command {
                     designator.to_owned(),
                     "tcpip".to_owned(),
                 )))
-            }
-            "setname" => {
-                let Some(name) = split.next() else {
-                    return Err(CommandError::MissingArgument(cmd.to_owned(), "username"));
-                };
-                Ok(Self::SetName(name.to_owned()))
             }
             cmd => Err(CommandError::Unrecognized(
                 cmd.to_owned(),

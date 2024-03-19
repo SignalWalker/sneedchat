@@ -1,7 +1,7 @@
 [application]
 
 # dioxus project name
-name = "SneedChat"
+name = "Bonfire"
 
 # default platfrom
 # you can also use `dx serve/build --platform XXX` to use other platform
@@ -12,7 +12,7 @@ default_platform = "desktop"
 out_dir = "dist"
 
 # resource (static) file folder
-asset_dir = "assets"
+asset_dir = "public"
 
 # hot reload by default
 hot_reload = true
@@ -26,13 +26,13 @@ title = "SneedChat"
 
 index_on_404 = true
 
-watch_path = ["src"]
+watch_path = ["src", "public"]
 
 # include `assets` in web platform
 [web.resource]
 
 # CSS style file
-style = []
+style = ["./assets/style.css"]
 
 # Javascript code file
 script = []
@@ -51,16 +51,16 @@ required = []
 
 [bundler]
 # Bundle identifier
-identifier = "io.github.SneedChat"
+identifier = "io.github.Bonfire"
 
 # Bundle publisher
-publisher = "SneedChat"
+publisher = "Ash Walker"
 
 # Bundle icon
 icon = ["icons/icon.png"]
 
 # Bundle resources
-resources = ["assets/*"]
+resources = ["public/*"]
 
 # Bundle copyright
 copyright = ""
@@ -69,9 +69,9 @@ copyright = ""
 category = "Utility"
 
 # Bundle short description
-short_description = "SneedChat!!!"
+short_description = "P2P chat/drawing app"
 
 # Bundle long description
 long_description = """
-Pictochat 2!!!!!!
+A peer-to-peer chat/drawing app.
 """

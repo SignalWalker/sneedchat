@@ -1,56 +1,130 @@
-[package]
-name = "sneedchat"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = ["lib/*", "bin/*"]
+
+[workspace.package]
+authors = ["Ash Walker <ash@ashwalker.net>"]
+repository = "https://github.com/SignalWalker/sneedchat"
+license = "AGPL-3.0-or-later"
 edition = "2021"
 
-[dependencies]
-# meta
+[workspace.dependencies]
 tracing = "^0.1"
-tracing-subscriber = { version = "^0.3", features = [
-  "time",
-  "env-filter",
-  "parking_lot",
-  "local-time",
-  "json",
-] }
-time = { version = "^0.3", features = ["formatting", "local-offset", "macros"] }
 thiserror = "^1"
 
-# chat
+rexa = { path = "/home/ash/projects/lib/rexa", features = [
+  "tokio",
+  "extra-diagnostics",
+] }
+rexa-netlayers = { path = "/home/ash/projects/lib/rexa/lib/rexa-netlayers", features = [
+  "tokio",
+] }
+syrup = { path = "/home/ash/projects/lib/rexa/lib/syrup", features = [] }
+
+tokio = { version = "^1.36", features = ["time", "sync", "macros", "io-util"] }
+futures = "^0.3"
+parking_lot = "^0.12"
+
 ed25519-dalek = { version = "^2.1", features = ["rand_core"] }
 uuid = { version = "^1.7", features = ["fast-rng", "v4"] }
 rand = { version = "^0.8" }
 dashmap = { version = "^5.5" }
 
-# captp
-rexa = { path = "/home/ash/projects/lib/rexa", default-features = false, features = [
-  "tokio",
-  "extra-diagnostics",
-  "netlayer-datastream",
-  "netlayer-onion",
-  "netlayer-mock",
-] }
-syrup = { path = "/home/ash/projects/lib/rexa/lib/syrup", features = [] }
-futures = { version = "^0.3" }
-tokio = { version = "^1.36", features = [
-  "rt-multi-thread",
-  "net",
-  "time",
-  "sync",
-  "signal",
-  "parking_lot",
-  "tracing",
-  "macros",
-] }
 
-# ui
-clap = { version = "^4.5", features = ["derive", "env"] }
-## gui
-dioxus = { version = "0.5.0-alpha.0", optional = true }
+[workspace.lints.rust]
+rust_2024_compatibility = "warn"
+let_underscore = "warn"
+fuzzy_provenance_casts = "warn"
+lossy_provenance_casts = "warn"
+meta_variable_misuse = "warn"
+missing_abi = "warn"
+multiple_supertrait_upcastable = "warn"
+must_not_suspend = "deny"
+unreachable_pub = "warn"
+unsafe_code = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_crate_dependencies = "warn"
+unused_macro_rules = "warn"
+variant_size_differences = "warn"
+# embark studios standard (https://github.com/EmbarkStudios/rust-ecosystem/blob/main/lints.toml)
+future_incompatible = "deny"
+nonstandard_style = "warn"
+rust_2018_idioms = "warn"
+# end embark studios lints
 
-[features]
-default = ["gui-desktop"]
-gui = ["dep:dioxus"]
-gui-desktop = ["gui", "dioxus/desktop"]
-# gui-web = [ "gui", "dioxus/web" ]
-# egui = [ "dep:eframe", "dep:egui_extras", "dep:egui" ]
+[workspace.lints.clippy]
+allow_attributes = "warn"
+needless_pass_by_value = "warn"
+# embark studios standard (https://github.com/EmbarkStudios/rust-ecosystem/blob/main/lints.toml)
+all = "warn"
+await_holding_lock = "warn"
+char_lit_as_u8 = "warn"
+checked_conversions = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+doc_markdown = "warn"
+empty_enum = "warn"
+enum_glob_use = "warn"
+exit = "warn"
+expl_impl_clone_on_copy = "warn"
+explicit_deref_methods = "warn"
+explicit_into_iter_loop = "warn"
+fallible_impl_from = "warn"
+filter_map_next = "warn"
+flat_map_option = "warn"
+float_cmp_const = "warn"
+fn_params_excessive_bools = "warn"
+from_iter_instead_of_collect = "warn"
+if_let_mutex = "warn"
+implicit_clone = "warn"
+imprecise_flops = "warn"
+inefficient_to_string = "warn"
+invalid_upcast_comparisons = "warn"
+large_digit_groups = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+let_unit_value = "warn"
+linkedlist = "warn"
+lossy_float_literal = "warn"
+macro_use_imports = "warn"
+manual_ok_or = "warn"
+map_err_ignore = "warn"
+map_flatten = "warn"
+map_unwrap_or = "warn"
+match_on_vec_items = "warn"
+match_same_arms = "warn"
+match_wild_err_arm = "warn"
+match_wildcard_for_single_variants = "warn"
+mem_forget = "warn"
+mismatched_target_os = "warn"
+missing_enforced_import_renames = "warn"
+mut_mut = "warn"
+mutex_integer = "warn"
+needless_borrow = "warn"
+needless_continue = "warn"
+needless_for_each = "warn"
+option_option = "warn"
+path_buf_push_overwrite = "warn"
+ptr_as_ptr = "warn"
+rc_mutex = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_functions_in_if_condition = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "allow"                 # override
+string_add_assign = "warn"
+string_add = "warn"
+string_lit_as_bytes = "warn"
+string_to_string = "warn"
+todo = "warn"
+trait_duplication_in_bounds = "warn"
+unimplemented = "warn"
+unnested_or_patterns = "warn"
+unused_self = "warn"
+useless_transmute = "warn"
+verbose_file_reads = "warn"
+zero_sized_map_values = "warn"
+# end embark studios standard
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = "warn"

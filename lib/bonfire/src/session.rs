@@ -1,12 +1,28 @@
-use crate::chat::{EventSender, SneedEvent, Swiss};
+use crate::{EventSender, NetworkEvent, Swiss};
 use dashmap::DashMap;
-use rexa::captp::{BootstrapEvent, CapTpSession, Event};
 use rexa::{
     async_compat::{AsyncRead, AsyncWrite},
     captp::RecvError,
 };
+use rexa::{
+    captp::{
+        msg::{DescExport, DescImport, DescImportObject},
+        BootstrapEvent, CapTpSession, Event,
+    },
+    impl_object,
+};
 use std::{collections::HashMap, sync::Arc};
 use tokio::{sync::watch, task::JoinSet};
+
+struct FulfillResponseHandler;
+impl FulfillResponseHandler {
+    #[inline]
+    fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+#[impl_object(tracing = ::tracing)]
+impl FulfillResponseHandler {}
 
 #[tracing::instrument(skip(event_pipe))]
 pub async fn manage_session<Reader, Writer>(
@@ -23,19 +39,22 @@ where
     async fn respond_to_fetch<Reader, Writer>(
         swiss: Swiss,
         resolver: FetchResolver,
-        registry: Arc<DashMap<Swiss, u64>>,
+        registry: Arc<DashMap<Swiss, DescExport>>,
         event_pipe: EventSender,
         session: CapTpSession<Reader, Writer>,
+        fulfill_response_handler: DescImport,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
     where
         Reader: AsyncRead + Unpin + Send + 'static,
         Writer: AsyncWrite + Unpin + Send + 'static,
     {
         if let Some(pos) = registry.get(&swiss) {
-            resolver.fulfill(*pos).await?;
+            resolver
+                .fulfill(*pos, None, fulfill_response_handler)
+                .await?;
         } else {
             let (sender, promise) = tokio::sync::oneshot::channel();
-            event_pipe.send(SneedEvent::Fetch {
+            event_pipe.send(NetworkEvent::Fetch {
                 session_key: *session.remote_vkey(),
                 swiss: swiss.clone(),
                 resolver: sender,
@@ -46,18 +65,22 @@ where
                     let pos = session.export(obj);
                     registry.insert(swiss, pos);
                     tracing::trace!("fulfilling promise");
-                    resolver.fulfill(pos).await?;
+                    resolver
+                        .fulfill(pos, None, fulfill_response_handler)
+                        .await?;
                 }
                 Err(reason) => {
                     tracing::trace!("breaking promise");
-                    resolver.break_promise(reason).await?;
+                    resolver.break_promise(&reason).await?;
                 }
             }
         }
         Ok(())
     }
     tracing::debug!("managing session");
-    let registry = Arc::new(DashMap::<Vec<u8>, u64>::new());
+    let fulfill_response_handler =
+        DescImport::Object(session.export(FulfillResponseHandler::new()).into());
+    let registry = Arc::new(DashMap::<Vec<u8>, DescExport>::new());
     let mut tasks = JoinSet::new();
     // let mut exports = HashMap::<u64, Arc<Channel<Reader, Writer>>>::new();
     let res = loop {
@@ -93,10 +116,11 @@ where
                     registry.clone(),
                     event_pipe.clone(),
                     session.clone(),
+                    fulfill_response_handler,
                 ));
             }
             Event::Abort(reason) => {
-                event_pipe.send(SneedEvent::SessionAborted {
+                event_pipe.send(NetworkEvent::SessionAborted {
                     session_key: *session.remote_vkey(),
                     reason,
                 })?;

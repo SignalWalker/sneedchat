@@ -1,17 +1,39 @@
-pub mod chat;
-mod cli;
+#![feature(strict_provenance)]
+#![feature(multiple_supertrait_upcastable)]
+#![feature(must_not_suspend)]
+#![feature(fs_try_exists)]
 
-#[cfg(feature = "gui")]
+use crate::cfg::{Config, PROJECT_DIRS};
+
+mod cfg;
+#[cfg(not(target_family = "wasm"))]
+mod cli;
 mod gui;
 
-#[cfg(feature = "gui")]
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let args = <cli::Cli as clap::Parser>::parse();
-    cli::initialize_tracing(args.log_filter.clone(), args.log_format);
+fn main() {
+    let cfg;
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let args = <cli::Cli as clap::Parser>::parse();
+        cli::initialize_tracing(args.log_filter.clone(), args.log_format);
+        let config_dir = args
+            .config_dir
+            .as_deref()
+            .unwrap_or_else(|| PROJECT_DIRS.config_dir());
+        tracing::info!(configuration_directory = ?config_dir, "reading config");
+        if !std::fs::try_exists(config_dir)
+            .expect("could not confirm/deny existence of configuration directory")
+        {
+            tracing::warn!(configuration_directory = ?config_dir, "config dir does not exist");
+            std::fs::create_dir_all(config_dir).expect("could not create configuration directory");
+        }
+        cfg = Config::read(config_dir).expect("could not read config");
+    }
 
-    gui::run(args)
+    gui::run(cfg);
 }
 
+#[cfg(feature = "terminal")]
 fn get_time(
     offset: time::UtcOffset,
     format: &(impl time::formatting::Formattable + ?Sized),
@@ -22,7 +44,7 @@ fn get_time(
         .unwrap()
 }
 
-#[cfg(not(feature = "gui"))]
+#[cfg(feature = "terminal")]
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     use crate::chat::ChatManager;
     use crate::chat::{handle_input, IoEvent, MailboxId};

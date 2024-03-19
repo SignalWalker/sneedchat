@@ -1,5 +1,5 @@
-use crate::chat::{manage_session, EventSender, SneedEvent};
-use futures::TryFutureExt;
+use crate::{manage_session, EventSender, NetworkEvent};
+use futures::{FutureExt, TryFutureExt};
 use rexa::{
     async_compat::{AsyncRead, AsyncWrite},
     captp::AbstractCapTpSession,
@@ -12,11 +12,24 @@ use tokio::{
     task::JoinSet,
 };
 
-pub type ConnectResult = Result<Arc<dyn AbstractCapTpSession + Send + Sync + 'static>, ()>;
+pub type ConnectResult =
+    Result<Arc<dyn AbstractCapTpSession + Send + Sync + 'static>, ConnectError>;
 pub type ConnectRequest = (
     NodeLocator<String, syrup::Item>,
     oneshot::Sender<ConnectResult>,
 );
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error(transparent)]
+    Send(#[from] mpsc::error::SendError<ConnectRequest>),
+    #[error(transparent)]
+    Recv(#[from] oneshot::error::RecvError),
+    #[error("`{0}` is not a registered transport type")]
+    UnregisteredTransport(String),
+    #[error(transparent)]
+    Netlayer(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+}
 
 pub struct NetlayerManager {
     tasks: JoinSet<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
@@ -31,7 +44,8 @@ impl NetlayerManager {
         }
     }
 
-    pub fn register<Nl: Netlayer>(
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn register<Nl>(
         &mut self,
         transport: String,
         nl: Nl,
@@ -39,7 +53,7 @@ impl NetlayerManager {
         end_flag: watch::Receiver<bool>,
     ) -> mpsc::UnboundedSender<ConnectRequest>
     where
-        Nl: Send + 'static,
+        Nl: Netlayer + Send + 'static,
         Nl::Reader: AsyncRead + Send + Unpin,
         Nl::Writer: AsyncWrite + Send + Unpin,
         Nl::Error: std::error::Error + Send + Sync + 'static,
@@ -56,16 +70,23 @@ impl NetlayerManager {
     pub fn request_connect(
         &self,
         locator: NodeLocator<String, syrup::Item>,
-    ) -> Result<
-        impl Future<Output = Result<ConnectResult, oneshot::error::RecvError>>,
-        mpsc::error::SendError<ConnectRequest>,
-    > {
+    ) -> Result<impl Future<Output = ConnectResult>, ConnectError> {
         let Some(nl) = self.layers.get(&locator.transport) else {
-            todo!("unregistered transport: {}", locator.transport)
+            return Err(ConnectError::UnregisteredTransport(locator.transport));
         };
         let (sender, receiver) = oneshot::channel();
         nl.send((locator, sender))?;
-        Ok(receiver)
+        Ok(receiver.map(|res| match res {
+            Ok(Ok(ok)) => Ok(ok),
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(err.into()),
+        }))
+    }
+}
+
+impl Default for NetlayerManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -79,7 +100,7 @@ async fn manage_netlayer<Nl: Netlayer>(
 where
     Nl::Reader: AsyncRead + Unpin + Send + 'static,
     Nl::Writer: AsyncWrite + Unpin + Send + 'static,
-    Nl::Error: std::error::Error,
+    Nl::Error: std::error::Error + Send + Sync + 'static,
 {
     tracing::debug!("managing netlayer");
     let mut session_tasks = JoinSet::new();
@@ -93,12 +114,12 @@ where
             Some((locator, res_pipe)) = connect_reqs.recv() => {
                 let session = match nl.connect(&locator).await {
                     Ok(session) => {
-                        let _ = res_pipe.send(Ok(session.as_dyn()));
+                        drop(res_pipe.send(Ok(session.as_dyn())));
                         session
                     }
                     Err(error) => {
                         tracing::error!(?error, "failed to connect to node");
-                        let _ = res_pipe.send(Err(()));
+                        drop(res_pipe.send(Err(ConnectError::Netlayer(Box::new(error)))));
                         continue
                     }
                 };
@@ -107,7 +128,7 @@ where
             },
             _ = end_flag.changed() => break,
         };
-        let _ = event_pipe.send(SneedEvent::NewSession(session.as_dyn()));
+        drop(event_pipe.send(NetworkEvent::SessionStarted(session.as_dyn())));
         let task_name = format!("manage_session: {session:?}");
         session_tasks
             // .build_task()
@@ -117,7 +138,7 @@ where
                 event_pipe.clone(),
                 end_flag.clone(),
             ));
-            // .unwrap();
+        // .unwrap();
     }
     session_tasks.abort_all();
     while let Some(res) = session_tasks.join_next().await {

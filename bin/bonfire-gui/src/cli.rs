@@ -1,8 +1,9 @@
-use clap::{Parser, Subcommand};
-use std::{net::SocketAddr, path::PathBuf};
+use std::path::PathBuf;
+
+use clap::Parser;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, clap::ValueEnum)]
-pub enum LogFormat {
+pub(super) enum LogFormat {
     Compact,
     Full,
     Pretty,
@@ -20,7 +21,7 @@ impl std::fmt::Display for LogFormat {
     }
 }
 
-pub fn initialize_tracing(log_filter: impl AsRef<str>, log_format: LogFormat) {
+pub(super) fn initialize_tracing(log_filter: impl AsRef<str>, log_format: LogFormat) {
     let tsub = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_timer(tracing_subscriber::fmt::time::OffsetTime::new(
@@ -42,28 +43,21 @@ pub fn initialize_tracing(log_filter: impl AsRef<str>, log_format: LogFormat) {
     }
 }
 
-// fn parse_path(path: &str) -> Result<PathBuf, std::io::Error> {
-//     PathBuf::from(path).canonicalize()
-// }
-
 #[derive(Parser, Debug)]
 #[command(version, author, about)]
-pub struct Cli {
+pub(super) struct Cli {
     /// Logging output filters; comma-separated
     #[arg(
         short,
         long,
-        default_value = "warn,sneedchat=info",
-        env = "SNEEDCHAT_LOG_FILTER"
+        default_value = "warn,bonfire=info,bonfire-gui=info",
+        env = "BONFIRE_LOG_FILTER"
     )]
-    pub log_filter: String,
+    pub(super) log_filter: String,
     /// Logging output format
     #[arg(long, default_value_t = LogFormat::Pretty)]
-    pub log_format: LogFormat,
-    #[arg(short, long, default_value_t = 53456)]
-    pub port: u16,
-    #[arg(short, long)]
-    pub username: Option<String>,
-    #[arg(short, long)]
-    pub remote: Option<SocketAddr>,
+    pub(super) log_format: LogFormat,
+    /// Path to the configuration directory.
+    #[arg(long, env = "BONFIRE_CONFIG_DIR")]
+    pub(super) config_dir: Option<PathBuf>,
 }
