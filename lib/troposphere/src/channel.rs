@@ -63,7 +63,7 @@ pub enum ChannelEvent {
     Introduce {
         channel: Channel,
         peer_key: PeerKey,
-        locator: NodeLocator<syrup::Symbol<String>, syrup::Item>,
+        locator: NodeLocator,
     },
 }
 
@@ -190,11 +190,7 @@ impl Channel {
     }
 
     #[deliver_only()]
-    fn introduce(
-        &self,
-        peer_key: PeerKey,
-        locator: NodeLocator<syrup::Symbol<String>, syrup::Item>,
-    ) -> Result<(), ObjectError> {
+    fn introduce(&self, peer_key: PeerKey, locator: NodeLocator) -> Result<(), ObjectError> {
         drop(self.core.ev_sender.send(ChannelEvent::Introduce {
             channel: self.clone(),
             peer_key,

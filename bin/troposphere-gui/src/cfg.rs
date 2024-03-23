@@ -4,7 +4,7 @@ mod desktop {
     use directories::ProjectDirs;
     use ed25519_dalek::{
         pkcs8::{DecodePrivateKey, EncodePrivateKey},
-        SigningKey,
+        SigningKey, VerifyingKey,
     };
     use figment::{
         providers::{Format, Toml},
@@ -12,20 +12,20 @@ mod desktop {
     };
     use rand::rngs::OsRng;
     use std::{
-        net::{IpAddr, Ipv4Addr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr},
         path::{Path, PathBuf},
     };
 
     lazy_static::lazy_static! {
-        pub(crate) static ref PROJECT_DIRS: ProjectDirs = ProjectDirs::from("org", "Signal Garden", "Bonfire").expect("could not get user home directory");
+        pub(crate) static ref PROJECT_DIRS: ProjectDirs = ProjectDirs::from("org", "Signal Garden", "Troposphere").expect("could not get user home directory");
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
     #[serde(default)]
     pub(crate) struct Directories {
-        cache: PathBuf,
-        data: PathBuf,
-        config: PathBuf,
+        pub(crate) cache: PathBuf,
+        pub(crate) data: PathBuf,
+        pub(crate) config: PathBuf,
     }
 
     impl Default for Directories {
@@ -38,32 +38,45 @@ mod desktop {
         }
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
-    #[serde(default)]
-    pub(crate) struct Desktop {
-        key_file: PathBuf,
-        directories: Directories,
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
+    pub(crate) struct MdnsConfig {
+        pub(crate) broadcast: bool,
+        pub(crate) listen: bool,
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    impl Default for MdnsConfig {
+        fn default() -> Self {
+            Self {
+                broadcast: true,
+                listen: true,
+            }
+        }
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Default, Debug, Clone)]
+    #[serde(default)]
+    pub(crate) struct Desktop {
+        pub(crate) key_file: PathBuf,
+        pub(crate) directories: Directories,
+        pub(crate) mdns: MdnsConfig,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
     #[serde(default)]
     pub(crate) struct TcpIpConfig {
-        listen_address: IpAddr,
-        port: u16,
+        pub(crate) listen_addresses: Vec<IpAddr>,
+        pub(crate) port: u16,
     }
 
     impl Default for TcpIpConfig {
         fn default() -> Self {
             Self {
-                listen_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
-                port: 43456,
+                listen_addresses: vec![
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                ],
+                port: 0,
             }
-        }
-    }
-
-    impl TcpIpConfig {
-        pub(crate) fn socket_addr(&self) -> std::net::SocketAddr {
-            std::net::SocketAddr::new(self.listen_address, self.port)
         }
     }
 
@@ -78,12 +91,23 @@ mod desktop {
     }
 
     impl Config {
-        pub(crate) fn read(config_dir: impl AsRef<Path>) -> Result<Self, figment::Error> {
+        pub(crate) fn read(
+            args: crate::cli::Cli,
+            config_dir: impl AsRef<Path>,
+        ) -> Result<Self, figment::Error> {
             let config_dir = config_dir.as_ref();
             let mut res: Config = Figment::new()
                 .merge(Toml::file(config_dir.join("config.toml")))
                 .extract()?;
             config_dir.clone_into(&mut res.desktop.directories.config);
+            // -- merge cli args --
+            if let Some(cache_dir) = args.cache_dir {
+                res.desktop.directories.cache = cache_dir;
+            }
+            if let Some(data_dir) = args.data_dir {
+                res.desktop.directories.data = data_dir;
+            }
+            // -- end merge cli args --
             if !res.desktop.key_file.has_root() {
                 res.desktop.key_file = res.desktop.directories.data.join("ed25519.sign");
             }
@@ -98,6 +122,7 @@ mod desktop {
         pub(crate) fn get_key_or_init(&self) -> Result<SigningKey, WriteError> {
             let path = &self.desktop.key_file;
             if path.try_exists()? {
+                tracing::debug!(?path, "found key file");
                 SigningKey::read_pkcs8_der_file(path).map_err(From::from)
             } else {
                 tracing::warn!(?path, "key file does not exist; generating new");
@@ -125,7 +150,7 @@ mod web {
 #[cfg(target_family = "wasm")]
 pub(crate) use web::*;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
 pub(crate) struct Profile {
     pub(crate) username: String,
@@ -139,7 +164,7 @@ impl Default for Profile {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub(crate) struct Config {
     pub(crate) profile: Profile,
@@ -148,7 +173,7 @@ pub(crate) struct Config {
     pub(crate) desktop: Desktop,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Debug, Clone)]
 #[serde(default)]
 pub(crate) struct NetlayerConfig {
     #[cfg(not(target_family = "wasm"))]

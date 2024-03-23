@@ -1,5 +1,5 @@
 [package]
-name = "bonfire-gui"
+name = "troposphere-gui"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-bonfire = { path = "../../lib/bonfire" }
+troposphere = { path = "../../lib/troposphere" }
 
 serde = { version = "^1", features = ["derive"] }
 
@@ -26,14 +26,17 @@ rand.workspace = true
 # syrup.workspace = true
 ## async
 futures.workspace = true
-# parking_lot.workspace = true
+parking_lot.workspace = true
+
+# HACK :: https://github.com/kotauskas/interprocess/issues/32
+interprocess = { version = "^1", features = ["tokio_support"] }
 
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 clap = { version = "^4.5", features = ["derive", "env"] }
 lazy_static = "^1"
 figment = { version = "^0.10", features = ["toml", "env"] }
-directories = "5.0.1"
+directories = "^5"
 toml = { version = "^0.8", features = ["display"] }
 
 tracing-subscriber = { version = "^0.3", features = [
@@ -44,7 +47,14 @@ tracing-subscriber = { version = "^0.3", features = [
   "json",
 ] }
 time = { version = "^0.3", features = ["formatting", "local-offset", "macros"] }
+
 dioxus = { version = "0.5.0-alpha.2", features = ["desktop"] }
+dioxus-desktop = { version = "0.5.0-alpha.2", features = [
+  "devtools",
+  "transparent",
+  "tokio",
+] }
+wry = { version = "^0.37", features = ["tracing", "transparent"] }
 
 rexa = { workspace = true, features = [] }
 rexa-netlayers = { workspace = true, features = ["datastream-tcp"] }
@@ -57,22 +67,30 @@ tokio = { workspace = true, features = [
   "tracing",
 ] }
 
-[target.'cfg(target_family = "wasm")'.dependencies]
-getrandom = { version = "^0.2", features = ["js"] }
-dioxus = { version = "0.5.0-alpha.2", features = ["web"] }
-rexa = { workspace = true, features = [] }
-rexa-netlayers = { workspace = true, features = ["datastream"] }
-tokio = { workspace = true, features = ["rt"] }
+mdns-sd = { version = "^0.10" }
+gethostname = "^0.4"
+# for encoding verifying keys in mdns properties
+base64 = "^0.22"
 
-figment = { version = "^0.10", features = [] }
+[target.'cfg(target_family = "unix")'.dependencies]
+pnet = { version = "^0.34" }
 
-wasm-bindgen = { version = "^0.2" }
-web-sys = { version = "^0.3", features = [
-  "Window",
-  "Navigator",
-  "StorageManager",
-] }
-gloo-storage = { version = "^0.3" }
+# [target.'cfg(target_family = "wasm")'.dependencies]
+# getrandom = { version = "^0.2", features = ["js"] }
+# dioxus = { version = "0.5.0-alpha.2", features = ["web"] }
+# rexa = { workspace = true, features = [] }
+# rexa-netlayers = { workspace = true, features = ["datastream"] }
+# tokio = { workspace = true, features = ["rt"] }
+#
+# figment = { version = "^0.10", features = [] }
+#
+# wasm-bindgen = { version = "^0.2" }
+# web-sys = { version = "^0.3", features = [
+#   "Window",
+#   "Navigator",
+#   "StorageManager",
+# ] }
+# gloo-storage = { version = "^0.3" }
 
 [features]
 default = []

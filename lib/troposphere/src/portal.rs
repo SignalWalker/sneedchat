@@ -182,10 +182,10 @@ pub struct RemotePortal {
 }
 
 impl RemotePortal {
-    pub async fn open_with(
-        bootstrap: &RemoteBootstrap,
-        skey: &mut SigningKey,
-        message: &[u8],
+    pub async fn open_with<'result>(
+        bootstrap: &'result RemoteBootstrap,
+        skey: &'result mut SigningKey,
+        message: &'result [u8],
     ) -> Result<Self, RemotePortalError> {
         // TODO :: this could probably be improved with promise pipelining
         bootstrap

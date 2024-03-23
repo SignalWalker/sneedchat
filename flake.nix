@@ -88,6 +88,7 @@
           in ''
             export LD_LIBRARY_PATH="${extraLdPaths}:$LD_LIBRARY_PATH"
             export XDG_DATA_DIRS="${extraDataDirs}:$XDG_DATA_DIRS"
+            export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules"
           '';
         });
       });

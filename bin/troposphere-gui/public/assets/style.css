@@ -1,0 +1,8 @@
+@font-face {
+	font-family: "Latitude";
+	src: local("Latitude Regular"), url("assets/fonts/degheest/woff/Latitude-Regular.woff2");
+}
+
+h1, h2, h3, h4, h5, h6 {
+	font-family: "Latitude", sans-serif;
+}

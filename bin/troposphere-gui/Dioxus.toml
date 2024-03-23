@@ -1,7 +1,7 @@
 [application]
 
 # dioxus project name
-name = "Bonfire"
+name = "Troposphere"
 
 # default platfrom
 # you can also use `dx serve/build --platform XXX` to use other platform
@@ -15,7 +15,7 @@ out_dir = "dist"
 asset_dir = "public"
 
 # hot reload by default
-hot_reload = true
+hot_reload = false
 
 [web.app]
 
@@ -26,7 +26,7 @@ title = "SneedChat"
 
 index_on_404 = true
 
-watch_path = ["src", "public"]
+watch_path = ["src"]
 
 # include `assets` in web platform
 [web.resource]
@@ -51,7 +51,7 @@ required = []
 
 [bundler]
 # Bundle identifier
-identifier = "io.github.Bonfire"
+identifier = "io.github.Troposphere"
 
 # Bundle publisher
 publisher = "Ash Walker"

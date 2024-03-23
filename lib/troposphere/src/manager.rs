@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    Channel, ChannelId, EventReceiver, EventSender, Gateway, NetlayerManager, NetworkEvent, Peer,
+    Channel, ChannelId, EventReceiver, EventSender, Gateway, NetlayerManager, NetworkEvent,
     Persona, GATEWAY_SWISS,
 };
 

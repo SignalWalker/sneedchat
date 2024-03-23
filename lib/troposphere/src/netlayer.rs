@@ -14,10 +14,7 @@ use tokio::{
 
 pub type ConnectResult =
     Result<Arc<dyn AbstractCapTpSession + Send + Sync + 'static>, ConnectError>;
-pub type ConnectRequest = (
-    NodeLocator<String, syrup::Item>,
-    oneshot::Sender<ConnectResult>,
-);
+pub type ConnectRequest = (NodeLocator, oneshot::Sender<ConnectResult>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
@@ -34,6 +31,7 @@ pub enum ConnectError {
 pub struct NetlayerManager {
     tasks: JoinSet<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     layers: HashMap<String, mpsc::UnboundedSender<ConnectRequest>>,
+    locators: HashMap<String, Vec<NodeLocator>>,
 }
 
 impl NetlayerManager {
@@ -41,6 +39,7 @@ impl NetlayerManager {
         Self {
             tasks: JoinSet::new(),
             layers: HashMap::new(),
+            locators: HashMap::new(),
         }
     }
 
@@ -60,16 +59,17 @@ impl NetlayerManager {
     {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.layers.insert(transport.clone(), sender.clone());
-        let locator = nl.locator::<String, String>();
+        let locators = nl.locators();
         self.tasks
             .spawn(manage_netlayer(nl, event_pipe, end_flag, receiver).map_err(From::from));
-        tracing::info!(%transport, %locator, "registered netlayer");
+        tracing::info!(%transport, ?locators, "registered netlayer");
+        self.locators.insert(transport, locators);
         sender
     }
 
     pub fn request_connect(
         &self,
-        locator: NodeLocator<String, syrup::Item>,
+        locator: NodeLocator,
     ) -> Result<impl Future<Output = ConnectResult>, ConnectError> {
         let Some(nl) = self.layers.get(&locator.transport) else {
             return Err(ConnectError::UnregisteredTransport(locator.transport));
@@ -82,6 +82,10 @@ impl NetlayerManager {
             Err(err) => Err(err.into()),
         }))
     }
+
+    pub fn locators(&self) -> impl Iterator<Item = &NodeLocator> {
+        self.locators.values().flatten()
+    }
 }
 
 impl Default for NetlayerManager {
@@ -90,7 +94,7 @@ impl Default for NetlayerManager {
     }
 }
 
-#[tracing::instrument(fields(nl = %nl.locator::<String, String>()), skip(event_pipe, end_flag, connect_reqs))]
+#[tracing::instrument(fields(nl = ?nl.locators()), skip(event_pipe, end_flag, connect_reqs))]
 async fn manage_netlayer<Nl: Netlayer>(
     nl: Nl,
     event_pipe: EventSender,

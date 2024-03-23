@@ -50,14 +50,21 @@ pub(super) struct Cli {
     #[arg(
         short,
         long,
-        default_value = "warn,bonfire=info,bonfire-gui=info",
-        env = "BONFIRE_LOG_FILTER"
+        default_value = "warn,troposphere=info,troposphere-gui=info",
+        env = "TROPOSPHERE_LOG_FILTER"
     )]
     pub(super) log_filter: String,
     /// Logging output format
     #[arg(long, default_value_t = LogFormat::Pretty)]
     pub(super) log_format: LogFormat,
     /// Path to the configuration directory.
-    #[arg(long, env = "BONFIRE_CONFIG_DIR")]
+    #[arg(long, env = "CONFIGURATION_DIRECTORY")]
     pub(super) config_dir: Option<PathBuf>,
+    /// Path to the cache directory.
+    #[arg(long, env = "CACHE_DIRECTORY")]
+    pub(super) cache_dir: Option<PathBuf>,
+    /// Path to the data directory.
+    #[arg(long, env = "STATE_DIRECTORY")]
+    pub(super) data_dir: Option<PathBuf>,
 }
+
