@@ -38,6 +38,7 @@ impl Gateway {
         #[arg(syrup_from = syrup::Bytes<Vec<u8>>)] message: Vec<u8>,
         signature: Signature,
     ) -> Result<DescExport, &'static str> {
+        tracing::debug!("received authentication request");
         if peer_vkey.verify_strict(&message, &signature).is_err() {
             return Err("could not verify signature");
         }
@@ -51,10 +52,12 @@ pub struct RemoteGateway {
 
 impl Fetch for RemoteGateway {
     type Swiss<'s> = ();
+    #[tracing::instrument(skip_all)]
     async fn fetch<'swiss>(
         bootstrap: &RemoteBootstrap,
         _: Self::Swiss<'swiss>,
     ) -> Result<Self, FetchError> {
+        tracing::info!("fetching gateway");
         Ok(Self {
             base: bootstrap.fetch(GATEWAY_SWISS).await?,
         })
@@ -62,6 +65,7 @@ impl Fetch for RemoteGateway {
 }
 
 impl RemoteGateway {
+    #[tracing::instrument(skip(self, skey), fields(message = %String::from_utf8_lossy(message)))]
     pub async fn authenticate_with(
         &self,
         skey: &mut SigningKey,
@@ -71,12 +75,14 @@ impl RemoteGateway {
             .await
     }
 
+    #[tracing::instrument(fields(vkey = rexa::hash(vkey), message = %String::from_utf8_lossy(message)), skip(self, signature))]
     pub async fn authenticate(
         &self,
         vkey: &VerifyingKey,
         message: &[u8],
         signature: &Signature,
     ) -> Result<RemotePortal, RemoteError> {
+        tracing::trace!("authenticating gateway");
         match self
             .base
             .call_and(
@@ -182,18 +188,23 @@ pub struct RemotePortal {
 }
 
 impl RemotePortal {
-    pub async fn open_with<'result>(
+    pub fn open_with<'result>(
         bootstrap: &'result RemoteBootstrap,
-        skey: &'result mut SigningKey,
+        skey: &mut SigningKey,
         message: &'result [u8],
-    ) -> Result<Self, RemotePortalError> {
-        // TODO :: this could probably be improved with promise pipelining
-        bootstrap
-            .fetch_with::<RemoteGateway>(())
-            .await?
-            .authenticate_with(skey, message)
-            .await
-            .map_err(From::from)
+    ) -> impl std::future::Future<Output = Result<Self, RemotePortalError>> + 'result {
+        let signature = skey.sign(message);
+        let vkey = skey.verifying_key();
+        async move {
+            // TODO :: this could probably be improved with promise pipelining
+            tracing::trace!("opening portal");
+            bootstrap
+                .fetch_with::<RemoteGateway>(())
+                .await?
+                .authenticate(&vkey, message, &signature)
+                .await
+                .map_err(From::from)
+        }
     }
 
     pub async fn open(

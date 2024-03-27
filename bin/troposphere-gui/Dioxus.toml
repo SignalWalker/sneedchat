@@ -20,19 +20,19 @@ hot_reload = false
 [web.app]
 
 # HTML title tag content
-title = "SneedChat"
+title = "Troposphere"
 
 [web.watcher]
 
 index_on_404 = true
 
-watch_path = ["src"]
+watch_path = ["src", "public"]
 
 # include `assets` in web platform
 [web.resource]
 
 # CSS style file
-style = ["./assets/style.css"]
+style = ["assets/style.css"]
 
 # Javascript code file
 script = []
@@ -48,30 +48,3 @@ script = []
 available = true
 
 required = []
-
-[bundler]
-# Bundle identifier
-identifier = "io.github.Troposphere"
-
-# Bundle publisher
-publisher = "Ash Walker"
-
-# Bundle icon
-icon = ["icons/icon.png"]
-
-# Bundle resources
-resources = ["public/*"]
-
-# Bundle copyright
-copyright = ""
-
-# Bundle category
-category = "Utility"
-
-# Bundle short description
-short_description = "P2P chat/drawing app"
-
-# Bundle long description
-long_description = """
-A peer-to-peer chat/drawing app.
-"""

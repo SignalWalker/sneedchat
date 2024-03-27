@@ -1,26 +1,26 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use dioxus::prelude::*;
+use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use futures::StreamExt;
 use parking_lot::{Condvar, Mutex, RwLock};
-use rexa::{captp::RemoteKey, locator::NodeLocator};
-use tokio::net::TcpListener;
-use troposphere::{ChannelId, ChatManager, RemotePortal};
+use rexa::{
+    captp::{AbstractCapTpSession, RemoteKey},
+    locator::NodeLocator,
+};
+use tokio::task::JoinSet;
+use troposphere::{ChannelId, ChatEvent, ChatManager, PeerKey, RemotePortal, RemotePortalError};
 
 use crate::cfg::{Config, WriteError};
-
-pub(crate) enum ManagerCommand {
-    OpenPortal { locator: NodeLocator },
-    Connect { id: ChannelId },
-    Stop,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ChatError {
     #[error("{0}")]
     Inner(String),
     #[error(transparent)]
-    Write(#[from] WriteError),
+    WriteConfig(#[from] WriteError),
+    #[error(transparent)]
+    PortalOpen(#[from] RemotePortalError),
 }
 
 impl From<Box<dyn std::error::Error + Send + Sync + 'static>> for ChatError {
@@ -46,8 +46,58 @@ impl ChatState {
     }
 }
 
+pub(crate) enum ManagerEvent {
+    Chat(ChatEvent),
+    OpenPortal {
+        locator: NodeLocator,
+    },
+    OpenedPortal {
+        session_key: RemoteKey,
+        portal: Arc<RemotePortal>,
+    },
+}
+
+impl From<ChatEvent> for ManagerEvent {
+    fn from(value: ChatEvent) -> Self {
+        Self::Chat(value)
+    }
+}
+
+fn handle_new_session(
+    session: Arc<dyn AbstractCapTpSession + Send + Sync>,
+    signing_key: &mut SigningKey,
+) -> impl std::future::Future<Output = Result<ManagerEvent, ChatError>> {
+    let signature = signing_key.sign(b"FIXTHIS");
+    let vkey = signing_key.verifying_key();
+    async move {
+        let session_key = *session.remote_vkey();
+        let portal = match RemotePortal::open(
+            &session.into_remote_bootstrap(),
+            &vkey,
+            b"FIXTHIS",
+            &signature,
+        )
+        .await
+        {
+            Ok(p) => Arc::new(p),
+            Err(error) => {
+                tracing::error!(
+                    session = rexa::hash(&session_key),
+                    %error,
+                    "could not open portal"
+                );
+                return Err(ChatError::from(error));
+            }
+        };
+        Ok(ManagerEvent::OpenedPortal {
+            session_key,
+            portal,
+        })
+    }
+}
+
 async fn manager_loop(
-    mut input: UnboundedReceiver<ManagerCommand>,
+    mut input: UnboundedReceiver<ManagerEvent>,
     cfg: Arc<Config>,
     ChatState {
         self_key,
@@ -73,7 +123,7 @@ async fn manager_loop(
             let tcp = &cfg.netlayers.tcpip;
             let mut listeners = Vec::with_capacity(tcp.listen_addresses.len());
             for addr in &tcp.listen_addresses {
-                match TcpListener::bind((*addr, tcp.port)).await {
+                match tokio::net::TcpListener::bind((*addr, tcp.port)).await {
                     Ok(listener) => listeners.push(listener),
                     Err(error) => tracing::error!(
                         address = %addr,
@@ -99,64 +149,52 @@ async fn manager_loop(
     tracing::trace!("starting chat manager loop");
 
     let mut portals = HashMap::<RemoteKey, Arc<RemotePortal>>::new();
+    let mut tasks = JoinSet::<Result<ManagerEvent, ChatError>>::new();
     loop {
-        let event = tokio::select! {
-            event = manager.recv_event() => event.unwrap(),
-            Some(command) = input.next() => match command {
-                ManagerCommand::OpenPortal { locator } => {
-                    if let Err(error) = manager.layers().request_connect(locator.clone()) {
-                        tracing::error!(?locator, %error, "failed to process connect request");
-                    }
-                    // we'll receive a ChatEvent::SessionStarted when the session's connected
+        let event: ManagerEvent = tokio::select! {
+            event = manager.recv_event() => event.unwrap().into(),
+            Some(Ok(task)) = tasks.join_next() => match task {
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::error!(%error, "chat subtask failed");
                     continue
-                },
-                ManagerCommand::Connect { id } => {
-                    continue
-                },
-                ManagerCommand::Stop => {
-                    break Ok(())
                 }
-            }
+            },
+            Some(event) = input.next() => event,
         };
 
         match event {
-            troposphere::ChatEvent::SessionStarted { session } => {
-                let session_key = *session.remote_vkey();
-                let portal = match RemotePortal::open_with(
-                    &session.into_remote_bootstrap(),
-                    manager.signing_key_mut(),
-                    b"FIXTHIS",
-                )
-                .await
-                {
-                    Ok(p) => Arc::new(p),
-                    Err(error) => {
-                        tracing::error!(
-                            session = rexa::hash(&session_key),
-                            %error,
-                            "could not open portal"
-                        );
-                        continue;
-                    }
-                };
-                portals.insert(session_key, portal.clone());
-                portals_signal.write().insert(session_key, portal);
+            ManagerEvent::Chat(ChatEvent::SessionStarted { session }) => {
+                tasks.spawn(handle_new_session(session, manager.signing_key_mut()));
             }
-            troposphere::ChatEvent::SessionAborted {
+            ManagerEvent::Chat(ChatEvent::SessionAborted {
                 session_key,
                 reason,
-            } => {
+            }) => {
                 if portals.remove(&session_key).is_some() {
                     portals_signal.write().remove(&session_key);
                     tracing::info!(session_key = rexa::hash(&session_key), %reason, "session aborted");
                 }
+            }
+            ManagerEvent::OpenPortal { locator } => {
+                if let Err(error) = manager.layers().request_connect(locator.clone()) {
+                    tracing::error!(?locator, %error, "failed to process connect request");
+                }
+                // we'll receive a ChatEvent::SessionStarted when the session's connected
+            }
+            ManagerEvent::OpenedPortal {
+                session_key,
+                portal,
+            } => {
+                portals.insert(session_key, portal.clone());
+                portals_signal.write().insert(session_key, portal);
             }
         }
     }
 }
 
 pub(super) fn manager_coroutine(
-    rx: UnboundedReceiver<ManagerCommand>,
+    rx: UnboundedReceiver<ManagerEvent>,
 ) -> impl std::future::Future<Output = ()> + Send {
     let cfg = use_context::<Arc<Config>>();
 

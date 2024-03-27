@@ -133,7 +133,7 @@ where
             _ = end_flag.changed() => break,
         };
         drop(event_pipe.send(NetworkEvent::SessionStarted(session.as_dyn())));
-        let task_name = format!("manage_session: {session:?}");
+        // let task_name = format!("manage_session: {session:?}");
         session_tasks
             // .build_task()
             // .name(&task_name)

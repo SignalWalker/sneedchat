@@ -55,14 +55,8 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use dioxus::{core_macro::rsx, prelude::*};
 use futures::StreamExt;
 use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
-use pnet::ipnetwork::IpNetwork;
-use rexa::{
-    captp::{CapTpSession, CapTpSessionManager, RemoteKey},
-    locator::NodeLocator,
-    netlayer::Netlayer,
-};
-use rexa_netlayers::datastream::TcpIpNetlayer;
-use tokio::{sync::RwLock as AsyncRwLock, task::JoinSet};
+use rexa::{captp::RemoteKey, locator::NodeLocator};
+use tokio::task::JoinSet;
 use troposphere::PeerKey;
 
 use std::{
@@ -71,7 +65,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::{cfg::Config, gui::chat::ChatState};
+use crate::{
+    cfg::Config,
+    gui::{chat::ChatState, Locator},
+};
 
 pub(crate) fn find_interface(
     pred: impl FnMut(&NetworkInterface) -> bool,
@@ -389,6 +386,8 @@ pub(crate) fn mdns_coroutine(
 #[allow(non_snake_case)]
 #[component]
 pub(crate) fn MdnsNav() -> Element {
+    // let chat = use_coroutine_handle::<ManagerCommand>();
+
     let mdns = use_context::<MdnsState>();
     tracing::trace!("rendering mdns nav");
     let entries = if let Some(status) = &*mdns.status.read() {
@@ -405,23 +404,24 @@ pub(crate) fn MdnsNav() -> Element {
                         rexa::syrup::Symbol("port".to_string()),
                         peer.addr.port().to_string(),
                     )]),
-                }
-                .to_string(),
+                },
             )
         });
         rsx! {
             menu {
                 for (name, locator) in locators {
                     li {
-                        a { href: locator, {name.clone()} }
-                        small { {locator.clone()} }
+                        Locator {
+                            locator: locator.clone(),
+                            "{name} @ {locator.designator}:{locator[\"port\"]}"
+                        }
                     }
                 }
             }
         }
     };
     rsx! {
-        nav {
+        nav { class: "tree",
             h1 { "LAN Peers" },
             {entries}
         }

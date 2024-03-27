@@ -144,8 +144,50 @@ pub(crate) use desktop::*;
 
 #[cfg(target_family = "wasm")]
 mod web {
-    pub(crate) struct Platform {}
-    impl Config {}
+    use crate::gui::chat::ChatError;
+
+    use super::{Config, Profile};
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    #[derive(Debug, thiserror::Error)]
+    pub(crate) enum WriteError {
+        #[error(transparent)]
+        Io(#[from] std::io::Error),
+        // #[error(transparent)]
+        // Serialize(#[from] toml::ser::Error),
+        #[error(transparent)]
+        Key(#[from] ed25519_dalek::pkcs8::Error),
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+    pub(crate) struct Web {
+        signing_key: SigningKey,
+    }
+
+    impl Default for Web {
+        fn default() -> Self {
+            Self {
+                signing_key: SigningKey::generate(&mut OsRng),
+            }
+        }
+    }
+
+    impl Config {
+        pub(crate) fn read() -> Result<Self, figment::Error> {
+            Ok(Self {
+                profile: Default::default(),
+                netlayers: Default::default(),
+                web: Web {
+                    signing_key: SigningKey::generate(&mut OsRng),
+                },
+            })
+        }
+
+        pub(crate) fn get_key_or_init(&self) -> Result<SigningKey, WriteError> {
+            Ok(self.web.signing_key.clone())
+        }
+    }
 }
 #[cfg(target_family = "wasm")]
 pub(crate) use web::*;
@@ -171,6 +213,8 @@ pub(crate) struct Config {
     pub(crate) netlayers: NetlayerConfig,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) desktop: Desktop,
+    #[cfg(target_family = "wasm")]
+    pub(crate) web: Web,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug, Clone)]

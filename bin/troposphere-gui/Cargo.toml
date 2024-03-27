@@ -17,7 +17,7 @@ tracing.workspace = true
 thiserror.workspace = true
 
 # chat
-ed25519-dalek = { workspace = true, features = ["alloc", "pkcs8"] }
+ed25519-dalek = { workspace = true, features = ["alloc", "pkcs8", "serde"] }
 # uuid.workspace = true
 rand.workspace = true
 # dashmap.workspace = true
@@ -28,9 +28,7 @@ rand.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 
-# HACK :: https://github.com/kotauskas/interprocess/issues/32
-interprocess = { version = "^1", features = ["tokio_support"] }
-
+manganis = { version = "^0.2" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 clap = { version = "^4.5", features = ["derive", "env"] }
@@ -48,8 +46,10 @@ tracing-subscriber = { version = "^0.3", features = [
 ] }
 time = { version = "^0.3", features = ["formatting", "local-offset", "macros"] }
 
-dioxus = { version = "0.5.0-alpha.2", features = ["desktop"] }
-dioxus-desktop = { version = "0.5.0-alpha.2", features = [
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", features = [
+  "desktop",
+] }
+dioxus-desktop = { git = "https://github.com/DioxusLabs/dioxus", features = [
   "devtools",
   "transparent",
   "tokio",
@@ -72,25 +72,31 @@ gethostname = "^0.4"
 # for encoding verifying keys in mdns properties
 base64 = "^0.22"
 
+# HACK :: https://github.com/kotauskas/interprocess/issues/32
+interprocess = { version = "^1", features = ["tokio_support"] }
+
 [target.'cfg(target_family = "unix")'.dependencies]
 pnet = { version = "^0.34" }
 
-# [target.'cfg(target_family = "wasm")'.dependencies]
-# getrandom = { version = "^0.2", features = ["js"] }
-# dioxus = { version = "0.5.0-alpha.2", features = ["web"] }
-# rexa = { workspace = true, features = [] }
-# rexa-netlayers = { workspace = true, features = ["datastream"] }
-# tokio = { workspace = true, features = ["rt"] }
-#
-# figment = { version = "^0.10", features = [] }
-#
-# wasm-bindgen = { version = "^0.2" }
-# web-sys = { version = "^0.3", features = [
-#   "Window",
-#   "Navigator",
-#   "StorageManager",
-# ] }
-# gloo-storage = { version = "^0.3" }
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "^0.2", features = ["js"] }
+
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", features = ["web"] }
+dioxus-web = { git = "https://github.com/DioxusLabs/dioxus", features = [] }
+
+rexa = { workspace = true, features = [] }
+rexa-netlayers = { workspace = true, features = ["datastream"] }
+tokio = { workspace = true, features = ["rt"] }
+
+figment = { version = "^0.10", features = [] }
+
+wasm-bindgen = { version = "^0.2" }
+web-sys = { version = "^0.3", features = [
+  "Window",
+  "Navigator",
+  "StorageManager",
+] }
+gloo-storage = { version = "^0.3" }
 
 [features]
 default = []

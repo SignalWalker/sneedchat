@@ -1,6 +1,6 @@
 #![allow(clippy::string_to_string)]
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, str::FromStr, sync::Arc};
 
 use dioxus::prelude::*;
 use rexa::{captp::RemoteKey, locator::NodeLocator};
@@ -8,11 +8,29 @@ use troposphere::{ChannelId, ChannelListing, RemotePortal};
 
 use crate::{
     cfg::Config,
-    gui::chat::{ChatState, ManagerCommand},
+    gui::chat::{ChatState, ManagerEvent},
     spawn_coroutine,
 };
 
 pub(crate) mod chat;
+
+mod components;
+pub(crate) use components::*;
+
+pub(crate) mod shortcuts;
+
+#[cfg(not(target_family = "wasm"))]
+const _: &str = manganis::mg!(file("./public/assets/style.css"));
+
+#[cfg(not(target_family = "wasm"))]
+fn ocapn_handler(request: wry::http::Request<Vec<u8>>) -> wry::http::Response<Cow<'static, [u8]>> {
+    use wry::http::{Request, Response};
+    tracing::info!(?request, "ocapn request");
+    Response::builder()
+        .status(200)
+        .body(Cow::from(&[]))
+        .unwrap()
+}
 
 #[tracing::instrument]
 pub(super) fn run(cfg: Config) {
@@ -21,7 +39,12 @@ pub(super) fn run(cfg: Config) {
     {
         builder = builder.with_cfg(
             dioxus_desktop::Config::new()
-                .with_data_directory(cfg.desktop.directories.data.join("dioxus")),
+                .with_window(dioxus_desktop::WindowBuilder::new().with_transparent(true))
+                .with_menu(None)
+                .with_background_color((0, 0, 0, 0))
+                .with_resource_directory(cfg.desktop.directories.data.join("assets"))
+                .with_data_directory(cfg.desktop.directories.data.join("dioxus"))
+                .with_custom_protocol("ocapn".to_owned(), ocapn_handler),
         );
     }
     builder.with_context(Arc::new(cfg)).launch(App);
@@ -39,12 +62,10 @@ fn App() -> Element {
     }
 
     rsx! {
-        Header {}
-        main { display: "flex", flex_direction: "row", width: "100%",
+        main {
             Navigator { }
             Channel { }
         }
-        Footer {}
     }
 }
 
@@ -62,6 +83,16 @@ fn Header() -> Element {
                 onclick: move |_| { show_modal(DIALOG_ID); },
                 "Connect",
             }
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+#[component]
+fn Footer() -> Element {
+    rsx! {
+        footer {
+            "Troposphere v0.1"
         }
     }
 }
@@ -90,7 +121,7 @@ fn PortalConnectDialog(id: &'static str) -> Element {
     fn close_dialog(id: &str) -> UseEval {
         eval(&format!(r#"document.getElementById("{id}").close();"#,))
     }
-    let manager = use_coroutine_handle::<ManagerCommand>();
+    let manager = use_coroutine_handle::<ManagerEvent>();
     rsx! {
         dialog {
             id: id,
@@ -98,21 +129,21 @@ fn PortalConnectDialog(id: &'static str) -> Element {
             form {
                 oninput: move |event| {
                     let values = event.values();
-                    match NodeLocator::from_str(&values["address"]) {
+                    match NodeLocator::from_str(&values["address"].as_value()) {
                         Ok(_) => set_custom_validity::<str>(ADDRESS_ID, None),
                         Err(error) => set_custom_validity(ADDRESS_ID, Some(&error.to_string()))
                     };
                 },
                 onsubmit: move |event| {
                     let values = event.values();
-                    let locator = match NodeLocator::from_str(&values["address"]) {
+                    let locator = match NodeLocator::from_str(&values["address"].as_value()) {
                         Ok(locator) => locator,
                         Err(error) => {
                             set_custom_validity(ADDRESS_ID, Some(&error.to_string()));
                             return
                         }
                     };
-                    manager.send(ManagerCommand::OpenPortal{
+                    manager.send(ManagerEvent::OpenPortal{
                         locator
                     });
                     set_custom_validity::<str>(ADDRESS_ID, None);
@@ -143,23 +174,33 @@ fn PortalConnectDialog(id: &'static str) -> Element {
 
 #[allow(non_snake_case)]
 #[component]
-fn Footer() -> Element {
+fn Navigator() -> Element {
+    #[cfg(not(target_family = "wasm"))]
     rsx! {
-        footer {
-            justify_content: "right",
-            "Troposphere v0.1"
+        nav {
+            ChannelNav {}
+            PortalNav {}
+            crate::native::MdnsNav {}
+        }
+    }
+    #[cfg(target_family = "wasm")]
+    rsx! {
+        nav {
+            ChannelNav {}
+            PortalNav {}
         }
     }
 }
 
 #[allow(non_snake_case)]
 #[component]
-fn Navigator() -> Element {
-    #[cfg(not(target_family = "wasm"))]
+fn ChannelNav() -> Element {
     rsx! {
-        nav { width: "33%",
-            crate::native::MdnsNav {}
-            PortalNav {}
+        nav { class: "tree",
+            h1 { "Channels" },
+            menu {
+                li { "..." }
+            }
         }
     }
 }
@@ -169,7 +210,7 @@ fn Navigator() -> Element {
 fn PortalNav() -> Element {
     let portals = use_signal_sync::<HashMap<RemoteKey, Arc<RemotePortal>>>(HashMap::new);
     rsx! {
-        nav {
+        nav { class: "tree",
             h1 { "Portals" },
             menu {
                 {portals
@@ -280,35 +321,56 @@ impl ChannelListingComponent {
 #[allow(non_snake_case)]
 #[component]
 fn Channel() -> Element {
+    let mut messages = vec![
+        Message(MessageData {
+            username: "Ash".to_owned(),
+            message: "Message!".to_owned(),
+        }),
+        Message(MessageData {
+            username: "Amaranth".to_owned(),
+            message: "Message...".to_owned(),
+        }),
+    ];
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        messages.push(Message(MessageData {
+            username: "Ash".to_owned(),
+            message: std::fs::read_to_string("public/assets/dragons-pass.md").unwrap(),
+        }));
+    }
+
     rsx! {
-        section {
-            h1 { "Channel!" }
-            section {
-                Message { msg: MessageData {
-                    username: "Ash".to_owned(), message: "Message!".to_owned()
-                } }
-                Message { msg: MessageData {
-                    username: "Amaranth".to_owned(), message: "Message...".to_owned()
-                } }
+        article { class: "channel",
+            div { class: "channel-info",
+                h1 { "Rat Jamboree" }
+                "This is a channel!"
+            }
+            div { class: "channel-content",
+                {messages.into_iter()}
             }
             MessageInput {}
         }
     }
 }
 
+#[derive(Clone, PartialEq, Props)]
 pub(super) struct MessageData {
     username: String,
     message: String,
 }
 
 #[allow(non_snake_case)]
-#[component]
-fn Message(msg: ReadOnlySignal<MessageData>) -> Element {
-    let MessageData { username, message } = &*msg.read();
+fn Message(MessageData { username, message }: MessageData) -> Element {
     rsx! {
-        article {
-            h1 { "{username}" }
-            p { "{message}" }
+        article { class: "message",
+            address {
+                img { class: "avatar", src: "assets/pond.svg" }
+                h1 { class: "username", "{username}" }
+            }
+            div { class: "message-content",
+                {message}
+            }
         }
     }
 }
@@ -317,8 +379,9 @@ fn Message(msg: ReadOnlySignal<MessageData>) -> Element {
 #[component]
 fn MessageInput() -> Element {
     rsx! {
-        form { onsubmit: move |event| { tracing::info!(?event, "Submitted message form") },
-            input { name: "message" }
+        form { class: "message-input",
+            onsubmit: move |event| { tracing::info!(?event, "Submitted message form") },
+            textarea { name: "message", spellcheck: true, wrap: "soft", autocomplete: "off" }
             input { r#type: "submit", value: "Send" }
         }
     }
