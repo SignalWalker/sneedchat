@@ -9,11 +9,16 @@ pub type UserId = uuid::Uuid;
 pub struct Profile {
     pub vkey: VerifyingKey,
     pub username: String,
+    pub avatar: Option<String>,
 }
 
 impl Profile {
-    pub fn new(vkey: VerifyingKey, username: String) -> Self {
-        Self { vkey, username }
+    pub fn new(vkey: VerifyingKey, username: String, avatar: Option<String>) -> Self {
+        Self {
+            vkey,
+            username,
+            avatar,
+        }
     }
 }
 

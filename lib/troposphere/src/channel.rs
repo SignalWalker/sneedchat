@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use ed25519_dalek::{Signature, SignatureError};
+use ed25519_dalek::{ed25519::signature::SignerMut, Signature, SignatureError, SigningKey};
 use rexa::{
     captp::{
         object::{DeliverOnlyError, ObjectError, RemoteObject},
         RemoteKey,
     },
     impl_object,
-    locator::NodeLocator,
+    locator::{NodeLocator, SturdyRefLocator},
 };
 use syrup::{Deserialize, Serialize};
 use tokio::{
@@ -20,31 +20,54 @@ use crate::{PeerKey, SyrupUuid, UserId};
 
 pub type MessageId = uuid::Uuid;
 
-#[derive(syrup::Serialize, syrup::Deserialize)]
+#[derive(syrup::Serialize, syrup::Deserialize, Clone)]
 #[syrup(name = "channel-listing")]
 pub struct ChannelListing {
     #[syrup(as = SyrupUuid)]
     pub id: ChannelId,
-    pub name: String,
+    pub info: ChannelInfo,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[syrup(name = "message")]
 pub struct Message {
     #[syrup(as = SyrupUuid)]
-    id: MessageId,
-    #[syrup(as = SyrupUuid)]
-    sender: UserId,
-    msg: String,
-    signature: Signature,
+    pub id: MessageId,
+    pub sender: PeerKey,
+    pub msg: String,
+    pub signature: Signature,
 }
 
 impl Message {
-    fn fields_to_bytes(id: MessageId, sender: UserId, msg: &str) -> Vec<u8> {
+    fn fields_to_bytes(id: MessageId, sender: PeerKey, msg: &str) -> Vec<u8> {
         let mut res = syrup::ser::to_bytes(&SyrupUuid(id)).unwrap();
-        res.extend_from_slice(&syrup::ser::to_bytes(&SyrupUuid(sender)).unwrap());
+        res.extend_from_slice(&syrup::ser::to_bytes(&sender).unwrap());
         res.extend_from_slice(&syrup::ser::to_bytes(msg).unwrap());
         res
+    }
+
+    pub fn new_signed(sender: PeerKey, msg: String, signature: Signature) -> Self {
+        Self {
+            id: MessageId::new_v4(),
+            sender,
+            msg,
+            signature,
+        }
+    }
+
+    pub fn new(
+        sender: PeerKey,
+        msg: String,
+        signing_key: &mut SigningKey,
+    ) -> Result<Self, ed25519_dalek::ed25519::Error> {
+        let id = MessageId::new_v4();
+        let signature = signing_key.try_sign(&Self::fields_to_bytes(id, sender, &msg))?;
+        Ok(Self {
+            id,
+            sender,
+            msg,
+            signature,
+        })
     }
 
     pub fn verify_strict(&self, key: &PeerKey) -> Result<(), SignatureError> {
@@ -60,10 +83,14 @@ pub enum ChannelEvent {
         channel: Channel,
         message: Message,
     },
+    PeerConnected {
+        channel: Channel,
+        peer_key: PeerKey,
+    },
     Introduce {
         channel: Channel,
         peer_key: PeerKey,
-        locator: NodeLocator,
+        locator: SturdyRefLocator,
     },
 }
 
@@ -86,9 +113,15 @@ impl Outbox {
     }
 }
 
+#[derive(Clone, syrup::Deserialize, syrup::Serialize, Debug)]
+pub struct ChannelInfo {
+    pub name: String,
+    pub description: String,
+}
+
 struct ChannelCore {
     id: ChannelId,
-    name: String,
+    info: ChannelInfo,
 
     ev_sender: mpsc::UnboundedSender<ChannelEvent>,
 
@@ -100,7 +133,7 @@ impl std::fmt::Debug for ChannelCore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChannelCore")
             .field("id", &self.id)
-            .field("name", &self.name)
+            .field("info", &self.info)
             .finish_non_exhaustive()
     }
 }
@@ -123,23 +156,27 @@ impl Channel {
     pub fn listing(&self) -> ChannelListing {
         ChannelListing {
             id: self.core.id,
-            name: self.core.name.clone(),
+            info: self.core.info.clone(),
         }
     }
 
-    pub fn name(&self) -> &String {
-        &self.core.name
+    pub fn info(&self) -> &ChannelInfo {
+        &self.core.info
+    }
+
+    pub fn id(&self) -> &ChannelId {
+        &self.core.id
     }
 
     pub fn new(
         id: uuid::Uuid,
-        name: String,
+        info: ChannelInfo,
         ev_sender: mpsc::UnboundedSender<ChannelEvent>,
     ) -> Self {
         Self {
             core: Arc::new(ChannelCore {
                 id,
-                name,
+                info,
                 ev_sender,
 
                 exported_at: DashMap::new(),
@@ -172,9 +209,14 @@ impl Channel {
         peer_key: PeerKey,
         outbox: RemoteObject,
     ) {
-        self.core
-            .outboxes
-            .insert(session_key, Outbox::new(outbox, peer_key));
+        let outbox = Outbox::new(outbox, peer_key);
+
+        self.core.outboxes.insert(session_key, outbox);
+
+        drop(self.core.ev_sender.send(ChannelEvent::PeerConnected {
+            channel: self.clone(),
+            peer_key,
+        }));
     }
 }
 
@@ -190,7 +232,7 @@ impl Channel {
     }
 
     #[deliver_only()]
-    fn introduce(&self, peer_key: PeerKey, locator: NodeLocator) -> Result<(), ObjectError> {
+    fn introduce(&self, peer_key: PeerKey, locator: SturdyRefLocator) -> Result<(), ObjectError> {
         drop(self.core.ev_sender.send(ChannelEvent::Introduce {
             channel: self.clone(),
             peer_key,

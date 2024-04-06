@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 troposphere = { path = "../../lib/troposphere" }
@@ -28,7 +28,11 @@ rand.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 
-manganis = { version = "^0.2" }
+manganis = { git = "https://github.com/DioxusLabs/collect-assets" }
+
+pulldown-cmark = "^0.10"
+
+dashmap.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 clap = { version = "^4.5", features = ["derive", "env"] }
@@ -54,7 +58,12 @@ dioxus-desktop = { git = "https://github.com/DioxusLabs/dioxus", features = [
   "transparent",
   "tokio",
 ] }
-wry = { version = "^0.37", features = ["tracing", "transparent"] }
+wry = { version = "^0.37", features = [
+  "tracing",
+  "transparent",
+  "linux-body",
+  "fullscreen",
+] }
 
 rexa = { workspace = true, features = [] }
 rexa-netlayers = { workspace = true, features = ["datastream-tcp"] }

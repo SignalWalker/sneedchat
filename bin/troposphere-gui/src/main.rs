@@ -50,6 +50,7 @@ where
     G: FnOnce(dioxus::hooks::UnboundedReceiver<M>) -> F,
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    // dioxus-web does not use tokio
     #[cfg(not(target_family = "wasm"))]
     {
         use_coroutine(move |rx| {
@@ -63,7 +64,6 @@ where
     }
     #[cfg(target_family = "wasm")]
     {
-        // dioxus-web does not use tokio
         use_coroutine(init)
     }
 }

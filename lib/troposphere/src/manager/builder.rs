@@ -17,6 +17,7 @@ pub struct ChatManagerBuilder {
     end_notifier: watch::Sender<bool>,
     subscription_tasks: JoinSet<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     username: Option<String>,
+    avatar: Option<String>,
 }
 
 impl ChatManagerBuilder {
@@ -34,11 +35,17 @@ impl ChatManagerBuilder {
             end_flag,
             subscription_tasks: JoinSet::new(),
             username: None,
+            avatar: None,
         }
     }
 
     pub fn with_username(mut self, username: String) -> Self {
         self.username = Some(username);
+        self
+    }
+
+    pub fn with_avatar(mut self, avatar: String) -> Self {
+        self.avatar = Some(avatar);
         self
     }
 
@@ -83,9 +90,9 @@ impl ChatManagerBuilder {
             .username
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let data = Arc::new(ChatData::default());
-        let persona = Arc::new(Persona::new(Profile::new(vkey, username)));
+        let persona = Arc::new(Persona::new(Profile::new(vkey, username, self.avatar)));
         ChatManager {
-            signing_key: skey,
+            signing_key: Arc::new(parking_lot::RwLock::new(skey)),
             persona,
 
             layers: Arc::new(self.layers),
@@ -95,7 +102,10 @@ impl ChatManagerBuilder {
             subscription_tasks: self.subscription_tasks.into(),
 
             data,
+
             gateway: Arc::new(Gateway::new(self.ev_sender)),
+            portals: Default::default(),
+            channels: Default::default(),
         }
     }
 }

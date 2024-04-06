@@ -111,7 +111,10 @@ impl TryFrom<&ServiceInfo> for MdnsPeer {
             Ok(Self {
                 vkey,
                 addr: SocketAddr::new(*address, info.get_port()),
-                name: info.get_hostname().to_owned(),
+                name: info
+                    .get_property_val_str("name")
+                    .unwrap_or_else(|| info.get_hostname())
+                    .to_owned(),
             })
         } else {
             Err(())
@@ -243,6 +246,7 @@ pub(crate) fn mdns_coroutine(
             mdns: &ServiceDaemon,
             interfaces: &[NetworkInterface],
             hostname: &str,
+            name: Option<&str>,
             self_key: &RemoteKey,
             address: SocketAddr,
         ) -> Result<String, MdnsError> {
@@ -256,16 +260,22 @@ pub(crate) fn mdns_coroutine(
                 })
                 .collect::<Vec<_>>();
             let port = address.port();
+            let vkey_encoded = STANDARD_NO_PAD.encode(self_key.to_bytes());
+            let properties = {
+                let vkey = ("verifying_key", vkey_encoded.as_str());
+                if let Some(name) = name {
+                    vec![vkey, ("name", name)]
+                } else {
+                    vec![vkey]
+                }
+            };
             let service = ServiceInfo::new::<&[IpAddr], &[(&str, &str)]>(
                 SERVICE_TYPE,
                 &format!("{port}.{hostname}"),
                 hostname,
                 addresses.as_slice(),
                 port,
-                &[(
-                    "verifying_key",
-                    &STANDARD_NO_PAD.encode(self_key.to_bytes()),
-                )],
+                &properties,
             )?;
             let fullname = service.get_fullname().to_owned();
             mdns.register(service)?;
@@ -307,6 +317,7 @@ pub(crate) fn mdns_coroutine(
                 &mdns,
                 &interfaces,
                 &hostname,
+                Some(&cfg.profile.username),
                 &self_key,
                 *address,
             )?);
@@ -421,7 +432,7 @@ pub(crate) fn MdnsNav() -> Element {
         }
     };
     rsx! {
-        nav { class: "tree",
+        nav {
             h1 { "LAN Peers" },
             {entries}
         }

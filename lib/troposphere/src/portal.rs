@@ -5,15 +5,20 @@ use ed25519_dalek::{ed25519::signature::SignerMut, Signature, SigningKey, Verify
 use rexa::{
     captp::{
         msg::DescExport,
-        object::{DeliverError, Fetch, FetchError, RemoteBootstrap, RemoteError, RemoteObject},
-        AbstractCapTpSession, RemoteKey,
+        object::{
+            DeliverError, Fetch, FetchError, ObjectError, RemoteBootstrap, RemoteError,
+            RemoteObject,
+        },
+        AbstractCapTpSession, GenericResolver, RemoteKey,
     },
     impl_object,
 };
 use syrup::{Deserialize, FromSyrupItem, Serialize};
-use tokio::sync::{mpsc, RwLock as AsyncRwLock};
+use tokio::sync::{mpsc, oneshot, RwLock as AsyncRwLock};
 
-use crate::{Channel, ChannelId, ChannelListing, NetworkEvent, PeerKey};
+use crate::{
+    Channel, ChannelEvent, ChannelId, ChannelInfo, ChannelListing, NetworkEvent, PeerKey, SyrupUuid,
+};
 
 pub const GATEWAY_SWISS: &[u8] = b"gateway";
 
@@ -31,18 +36,27 @@ impl Gateway {
 impl Gateway {
     #[deliver()]
     #[allow(clippy::needless_pass_by_value)]
-    fn authenticate(
+    async fn authenticate(
         &self,
-        #[arg(mapped = &*session)] session: &(dyn AbstractCapTpSession + Send + Sync),
+        #[arg(session)] session: Arc<dyn AbstractCapTpSession + Send + Sync>,
         peer_vkey: PeerKey,
         #[arg(syrup_from = syrup::Bytes<Vec<u8>>)] message: Vec<u8>,
         signature: Signature,
-    ) -> Result<DescExport, &'static str> {
+        #[arg(resolver)] resolver: GenericResolver,
+    ) -> Result<(), ObjectError> {
         tracing::debug!("received authentication request");
         if peer_vkey.verify_strict(&message, &signature).is_err() {
-            return Err("could not verify signature");
+            return resolver
+                .break_promise("could not verify signature")
+                .await
+                .map_err(From::from);
         }
-        Ok(session.exports().export(Arc::new(Portal::new())))
+        drop(self.ev_sender.send(NetworkEvent::PortalRequest {
+            session,
+            peer_vkey,
+            resolver,
+        }));
+        Ok(())
     }
 }
 
@@ -87,14 +101,19 @@ impl RemoteGateway {
             .base
             .call_and(
                 "authenticate",
-                &syrup::raw_syrup_unwrap![vkey, message, signature],
+                &syrup::raw_syrup_unwrap![vkey, &syrup::Bytes(message), signature],
             )
             .await?
             .pop()
         {
             Some(position) => match DescExport::from_syrup_item(&position) {
                 Ok(pos) => Ok(RemotePortal {
-                    base: unsafe { self.base.get_remote_object_unchecked(pos) },
+                    base: unsafe {
+                        self.base
+                            .session()
+                            .clone()
+                            .into_remote_object_unchecked(pos)
+                    },
                 }),
                 Err(_) => Err(RemoteError::unexpected("DescExport", 0, position)),
             },
@@ -106,13 +125,12 @@ impl RemoteGateway {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[syrup(name = "connect-result")]
 pub(crate) struct ConnectResult {
-    self_key: PeerKey,
     position: DescExport,
-    name: String,
 }
 
 pub struct Portal {
-    channels: DashMap<ChannelId, Channel>,
+    remote_key: PeerKey,
+    channels: Arc<DashMap<ChannelId, Channel>>,
 }
 
 impl std::fmt::Debug for Portal {
@@ -122,9 +140,10 @@ impl std::fmt::Debug for Portal {
 }
 
 impl Portal {
-    fn new() -> Self {
+    pub(crate) fn new(remote_key: PeerKey, channels: Arc<DashMap<ChannelId, Channel>>) -> Self {
         Self {
-            channels: DashMap::new(),
+            remote_key,
+            channels,
         }
     }
 }
@@ -139,35 +158,31 @@ impl Portal {
             .collect()
     }
 
-    // #[deliver()]
-    // fn connect(
-    //     &self,
-    //     #[arg(session)] session: Arc<dyn AbstractCapTpSession + Send + Sync>,
-    //     channel_id: SyrupUuid,
-    //     outbox: DescExport,
-    // ) -> Result<ConnectResult, &'static str> {
-    //     let Some(channel) = self.channels.get(&channel_id.0) else {
-    //         return Err("unrecognized channel id");
-    //     };
-    //
-    //     // let peers = channel;
-    //
-    //     let position = match channel.exported_position(session.remote_vkey()) {
-    //         Some(pos) => (*pos).into(),
-    //         // FIX :: eugh
-    //         None => session.exports().export(Arc::new(channel.clone())),
-    //     };
-    //
-    //     channel.connect_peer(*session.remote_vkey(), self.remote_peer_key, unsafe {
-    //         session.into_remote_object_unchecked(outbox)
-    //     });
-    //
-    //     Ok(ConnectResult {
-    //         self_key: self.local_peer_key,
-    //         position,
-    //         name: channel.name().clone(),
-    //     })
-    // }
+    #[deliver()]
+    fn connect(
+        &self,
+        #[arg(session)] session: Arc<dyn AbstractCapTpSession + Send + Sync>,
+        #[arg(syrup_from = SyrupUuid)] channel_id: ChannelId,
+        outbox: DescExport,
+    ) -> Result<ConnectResult, &'static str> {
+        let Some(channel) = self.channels.get(&channel_id) else {
+            return Err("unrecognized channel id");
+        };
+
+        // let peers = channel;
+
+        let position = match channel.exported_position(session.remote_vkey()) {
+            Some(pos) => (*pos).into(),
+            // FIX :: eugh
+            None => session.exports().export(Arc::new(channel.clone())),
+        };
+
+        channel.connect_peer(*session.remote_vkey(), self.remote_key, unsafe {
+            session.into_remote_object_unchecked(outbox)
+        });
+
+        Ok(ConnectResult { position })
+    }
 
     #[exported()]
     fn exported(&self, remote_key: &RemoteKey, position: DescExport) {
@@ -195,18 +210,10 @@ impl RemotePortal {
     ) -> impl std::future::Future<Output = Result<Self, RemotePortalError>> + 'result {
         let signature = skey.sign(message);
         let vkey = skey.verifying_key();
-        async move {
-            // TODO :: this could probably be improved with promise pipelining
-            tracing::trace!("opening portal");
-            bootstrap
-                .fetch_with::<RemoteGateway>(())
-                .await?
-                .authenticate(&vkey, message, &signature)
-                .await
-                .map_err(From::from)
-        }
+        async move { Self::open(bootstrap, &vkey, message, &signature).await }
     }
 
+    #[tracing::instrument(fields(vkey = rexa::hash(vkey), message = %String::from_utf8_lossy(message)), skip(bootstrap, signature))]
     pub async fn open(
         bootstrap: &RemoteBootstrap,
         vkey: &VerifyingKey,
@@ -214,6 +221,7 @@ impl RemotePortal {
         signature: &Signature,
     ) -> Result<Self, RemotePortalError> {
         // TODO :: this could probably be improved with promise pipelining
+        tracing::trace!("opening portal");
         bootstrap
             .fetch_with::<RemoteGateway>(())
             .await?
@@ -222,36 +230,53 @@ impl RemotePortal {
             .map_err(From::from)
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn list_channels(&self) -> Result<Vec<ChannelListing>, DeliverError> {
-        match self.base.deliver_and(["list_channels"]).await?.pop() {
+        match self
+            .base
+            .deliver_and([&syrup::Symbol("list_channels")])
+            .await?
+            .pop()
+        {
             Some(channels) => Ok(Vec::from_syrup_item(&channels).unwrap_or_default()),
             None => Ok(Vec::new()),
         }
     }
 
-    // pub async fn connect(
-    //     &self,
-    //     channel_id: ChannelId,
-    //     ev_sender: mpsc::UnboundedSender<ChannelEvent>,
-    // ) -> Result<Channel, ConnectError> {
-    //     let Some(arg) = self
-    //         .base
-    //         .call_and("connect", &[SyrupUuid(channel_id)])
-    //         .await?
-    //         .pop()
-    //     else {
-    //         return Err(ConnectError::MissingResult);
-    //     };
-    //
-    //     let Ok(connect) = ConnectResult::from_syrup_item(&arg) else {
-    //         return Err(ConnectError::UnexpectedArgument(arg));
-    //     };
-    //
-    //     let channel = Channel::new(channel_id, connect.name, ev_sender);
-    //     channel.connect_peer(self.base.remote_vkey(), connect.self_key, unsafe {
-    //         self.base.get_remote_object_unchecked(connect.position)
-    //     });
-    //
-    //     Ok(channel)
-    // }
+    pub async fn connect(
+        &self,
+        channel_id: ChannelId,
+        info: ChannelInfo,
+        ev_sender: mpsc::UnboundedSender<ChannelEvent>,
+    ) -> Result<Channel, ObjectError> {
+        let channel = Channel::new(channel_id, info, ev_sender);
+
+        let pos = self
+            .base
+            .session()
+            .exports()
+            .export(Arc::new(channel.clone()));
+
+        let Some(arg) = self
+            .base
+            .call_and(
+                "connect",
+                &syrup::raw_syrup_unwrap![&SyrupUuid(channel_id), &pos],
+            )
+            .await?
+            .pop()
+        else {
+            return Err(ObjectError::missing(0, "ConnectResult"));
+        };
+
+        let Ok(connect) = ConnectResult::from_syrup_item(&arg) else {
+            return Err(ObjectError::unexpected("ConnectResult", 0, arg));
+        };
+
+        // channel.connect_peer(self.base.remote_vkey(), connect.self_key, unsafe {
+        //     self.base.get_remote_object_unchecked(connect.position)
+        // });
+
+        Ok(channel)
+    }
 }

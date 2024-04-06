@@ -14,10 +14,11 @@ pub(crate) struct LocatorProps {
 
 pub(crate) fn Locator(LocatorProps { locator, children }: LocatorProps) -> Element {
     let chat = use_coroutine_handle::<ManagerEvent>();
+    let href = locator.to_string();
     rsx! {
-        button {
-            role: "link",
-            r#type: "button",
+        a {
+            href: href,
+            prevent_default: "onclick",
             onclick: move |_event| {
                 chat.send(ManagerEvent::OpenPortal { locator: locator.clone() });
             },

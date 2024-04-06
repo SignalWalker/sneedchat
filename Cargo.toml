@@ -5,7 +5,7 @@ members = ["lib/*", "bin/*"]
 [workspace.package]
 authors = ["Ash Walker <ash@ashwalker.net>"]
 repository = "https://github.com/SignalWalker/sneedchat"
-license = "AGPL-3.0-or-later"
+license-file = "LICENSE.txt"
 edition = "2021"
 
 [workspace.dependencies]

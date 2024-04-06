@@ -2,3 +2,4 @@
 /.vscode
 dist/
 /.local
+rust-analyzer.json

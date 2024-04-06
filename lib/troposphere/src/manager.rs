@@ -12,7 +12,7 @@ use tokio::{
 
 use crate::{
     Channel, ChannelId, EventReceiver, EventSender, Gateway, NetlayerManager, NetworkEvent,
-    Persona, GATEWAY_SWISS,
+    PeerKey, Persona, Portal, GATEWAY_SWISS,
 };
 
 mod builder;
@@ -82,7 +82,7 @@ impl ChatData {
 
 pub struct ChatManager {
     pub persona: Arc<Persona>,
-    signing_key: SigningKey,
+    pub signing_key: Arc<parking_lot::RwLock<SigningKey>>,
 
     layers: Arc<NetlayerManager>,
     ev_sender: EventSender,
@@ -95,6 +95,8 @@ pub struct ChatManager {
     data: Arc<ChatData>,
 
     gateway: Arc<Gateway>,
+    portals: Arc<DashMap<PeerKey, Arc<Portal>>>,
+    channels: Arc<DashMap<ChannelId, Channel>>,
 }
 
 impl std::fmt::Debug for ChatManager {
@@ -108,14 +110,6 @@ impl std::fmt::Debug for ChatManager {
 impl ChatManager {
     pub fn builder(signing_key: SigningKey) -> ChatManagerBuilder {
         ChatManagerBuilder::new(signing_key)
-    }
-
-    pub fn signing_key(&self) -> &SigningKey {
-        &self.signing_key
-    }
-
-    pub fn signing_key_mut(&mut self) -> &mut SigningKey {
-        &mut self.signing_key
     }
 
     pub fn event_sender(&self) -> &EventSender {
@@ -139,6 +133,10 @@ impl ChatManager {
                 .await
                 .and_then(|event| ev_sender.send(event).map_err(From::from))
         });
+    }
+
+    pub fn register_channel(&self, channel: Channel) -> Option<Channel> {
+        self.channels.insert(*channel.id(), channel)
     }
 
     pub async fn recv_event(
@@ -178,6 +176,27 @@ impl ChatManager {
                         session_key,
                         reason,
                     });
+                }
+                NetworkEvent::PortalRequest {
+                    session,
+                    peer_vkey,
+                    resolver,
+                } => {
+                    tracing::debug!(
+                        peer_vkey = rexa::hash(&peer_vkey),
+                        "received portal request"
+                    );
+                    let pos = session.exports().export(
+                        self.portals
+                            .entry(peer_vkey)
+                            .or_insert_with(|| {
+                                Arc::new(Portal::new(peer_vkey, self.channels.clone()))
+                            })
+                            .clone(),
+                    );
+                    if let Err(error) = resolver.fulfill([&pos], None, Default::default()).await {
+                        tracing::error!(%error, "could not fulfill portal request");
+                    };
                 }
             }
         }

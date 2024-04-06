@@ -196,12 +196,14 @@ pub(crate) use web::*;
 #[serde(default)]
 pub(crate) struct Profile {
     pub(crate) username: String,
+    pub(crate) avatar: String,
 }
 
 impl Default for Profile {
     fn default() -> Self {
         Self {
             username: "<Unknown>".to_owned(),
+            avatar: "pond.svg".to_owned(),
         }
     }
 }

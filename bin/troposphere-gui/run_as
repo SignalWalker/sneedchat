@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+
+user_root=$(realpath -L "$PWD/../../.local/$1")
+
+env CONFIGURATION_DIRECTORY="$user_root/config" \
+	CACHE_DIRECTORY="$user_root/cache" \
+	STATE_DIRECTORY="$user_root/share" \
+	${argv[2, -1]}

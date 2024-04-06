@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
 use ed25519_dalek::VerifyingKey;
-use rexa::captp::{object::Object, AbstractCapTpSession};
+use rexa::captp::{object::Object, AbstractCapTpSession, GenericResolver};
 use syrup::RawSyrup;
 use tokio::sync::oneshot;
 
-use crate::ChatEvent;
+use crate::{ChatEvent, PeerKey};
 
 pub enum NetworkEvent {
+    PortalRequest {
+        session: Arc<dyn AbstractCapTpSession + Send + Sync>,
+        peer_vkey: PeerKey,
+        resolver: GenericResolver,
+    },
     SessionStarted(Arc<dyn AbstractCapTpSession + Send + Sync + 'static>),
     Fetch {
         session_key: VerifyingKey,
@@ -26,6 +31,7 @@ pub enum NetworkEvent {
 impl std::fmt::Debug for NetworkEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PortalRequest { session, peer_vkey, resolver } => f.debug_struct("PortalRequest").field("peer_vkey", &rexa::hash(peer_vkey)).finish_non_exhaustive(),
             Self::TaskFinished { .. } => f.debug_struct("TaskFinished").finish_non_exhaustive(),
             Self::Fetch {
                 session_key, swiss, ..

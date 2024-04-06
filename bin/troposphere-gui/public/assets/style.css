@@ -1,53 +1,65 @@
 @font-face {
 	font-family: "Latitude";
-	src: local("Latitude Regular"), url("assets/fonts/degheest/woff/Latitude-Regular.woff2") format("woff2")
-		url("assets/fonts/degheest/woff/Latitude-Regular.woff") format("woff");
+	src: local("Latitude Regular"), url("/assets/fonts/degheest/woff/Latitude-Regular.woff2") format("woff2")
+		url("/assets/fonts/degheest/woff/Latitude-Regular.woff") format("woff");
 }
 
 :root {
 	--empty-bg: navajowhite;
 	--interface-bg: white;
-	--interface-shadow: rgba(0, 0, 0, 0.5);
+	--interface-shadow: 4px 4px rgba(0, 0, 0, 0.5) inset;
+	--interface-label-shadow: 4px 4px rgba(0, 0, 0, 0.5);
+	--interface-border-bg: white;
 	--label-bg: white;
 	--channel-bg: white;
-	--channel-bg-img: url("assets/boat.gif");
-	--channel-shadow: rgba(0, 0, 0, 0.5);
+	--channel-bg-img: url("/assets/backgrounds/river.jpg");
+	--channel-shadow: 4px 4px rgba(0, 0, 0, 0.5);
 	--msg-bg: white;
 	--msg-shadow: var(--channel-shadow);
+}
+
+* {
+	image-rendering: pixelated;
 }
 
 h1, h2, h3, h4, h5, h6 {
 	font-family: "Latitude", sans-serif;
 }
 
-button[role="link"] {
-	color: blue;
-	text-decoration: underline;
-	cursor: pointer;
+[title] {
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
 }
 
-button[role="link"]:hover,
-button[role="link"]:active,
-button[role="link"]:focus {
-	color: purple;
+input:is([type="button"], [type="submit"], [type="reset"]), input[type="file"]::file-selector-button, button {
+    border: outset;
+    background-color: white;
 }
 
-button[role="link"]:focus {
-	background-color: palegoldenrod;
-	outline: 1px dotted;
+input:is([type="button"], [type="submit"], [type="reset"]):active, input[type="file"]::file-selector-button:active, button:active {
+    border: inset;
+    background-color: white;
+    box-shadow: var(--interface-shadow);
+}
+
+html {
+	background-color: var(--interface-border-bg);
+	border: double;
+	box-sizing: border-box;
 }
 
 html, body {
 	height: 100%;
 	max-height: 100vh;
-	background-color: #00000000;
 }
 
 body {
+	--interface-gap: 0.5em;
+
 	display: flex;
 	box-sizing: border-box;
 	margin: 0px;
-	padding: 0.5em;
+	padding: var(--interface-gap);
 	background-color: var(--empty-bg);
 }
 
@@ -61,181 +73,294 @@ body {
 	min-height: 0px;
 }
 
-header {
-	box-sizing: border-box;
-
-	border: outset;
-	margin-bottom: 0.5em;
-	padding: 0.5em;
-}
-
 main {
 	flex-grow: 1;
 	box-sizing: border-box;
 
 	display: flex;
-	gap: 0.5em;
-}
-
-footer {
-	flex-shrink: 0;
 }
 
 main > * {
 	min-height: 0px;
 }
 
-main>nav {
-	width: 16em;
+#navigator {
+	min-width: min-content;
+	/* min-width: 16em; */
+	max-width: 12%;
+	margin-right: var(--interface-gap);
 
-	display: flex;
-	flex-direction: column;
-	gap: 1em;
+	display: block grid;
+	grid-auto-rows: 1fr;
+	/* flex-direction: column; */
+	gap: var(--interface-gap);
 }
 
-nav.tree {
-	flex-grow: 1;
+/* #navigator:not([open]) { */
+/* 	position: absolute; */
+/* 	z-index: 1; */
+/* 	background-color: white; */
+/* 	border: double; */
+/* 	box-shadow: var(--channel-shadow); */
+/* 	padding: 0.5em; */
+/* } */
 
-	display: flex;
-	flex-direction: column;
-	margin: 0px;
-}
+#navigator>nav {
+	min-height: 0px;
+	min-width: min-content;
 
-nav.tree > * {
-	background-color: var(--interface-bg);
-}
+	/* flex-grow: 1; */
 
-nav.tree>h1 {
-	width: fit-content;
 	margin: 0px;
 	padding: 0.5em;
 
-	border-style: double double none double;
+	border: double;
+	box-shadow: var(--interface-shadow);
+	background-color: var(--interface-bg);
+
+	overflow: scroll;
 
 }
 
-nav.tree>menu {
-	flex-grow: 1;
-	border: inset;
-	margin: 0em;
-	padding-top: 0.5em;
-	padding-bottom: 0.5em;
+#navigator>nav>h1 {
+	box-sizing: border-box;
+	min-width: min-content;
 
-	box-shadow: 4px 4px var(--interface-shadow) inset;
+	margin: 0px;
+	padding: 0.5em;
+
+	text-align: center;
+	background-color: var(--interface-bg);
+
+	border-style: double;
+	box-shadow: var(--interface-label-shadow);
+}
+
+#navigator>nav>menu {
+	padding-inline-start: 0px;
+
+	overflow-wrap: anywhere;
+}
+
+#navigator>nav>menu>li {
+	cursor: pointer;
+}
+
+.about {
+	--about-padding: 0.5em;
+
+	/* box shadow trick */
+	position: relative;
+
+	flex-grow: 1;
+	box-sizing: border-box;
+
+	border: double;
+	padding: var(--about-padding);
+
+	background-color: white;
+
+	display: flex;
+	justify-content: center;
+	align-items: center;
+}
+
+.about::before {
+	content: "";
+	position: absolute;
+	inset: 0px;
+
+	pointer-events: none;
+
+	box-shadow: var(--channel-shadow) inset;
+}
+
+.about > h1 {
+	border: double;
+	box-shadow: var(--channel-shadow);
+
+	width: fit-content;
+	height: fit-content;
+
+	margin: 0px;
+	padding: 0.5em;
 }
 
 .channel {
+	--channel-padding: 0.5em;
+
+	/* this allows the box-shadow trick */
+	position: relative;
+
 	flex-grow: 1;
+	box-sizing: border-box;
 
 	display: flex;
 	flex-direction: column;
-	gap: 1em;
 
-	border: inset;
-	box-shadow: 4px 4px var(--channel-shadow) inset;
-	padding: 0.5em;
+	border: double;
+	padding: 0px var(--channel-padding) var(--channel-padding);
 
 	background-color: var(--channel-bg);
 	background-image: var(--channel-bg-img);
+	background-size: cover;
 	background-attachment: fixed;
+	background-position: center;
 }
 
-.channel-main {
-	flex-grow: 1;
-	width: 100%;
-	min-height: 0px;
+/* this is to allow the inset shadow to display over the inner content, so it looks nice when scrolling */
+.channel::before {
+	content: "";
+	position: absolute;
+	inset: 0px;
+	pointer-events: none;
 
-	display: flex;
-	flex-direction: row-reverse;
-	gap: 1em;
+	box-shadow: var(--channel-shadow) inset;
+
 }
 
- .channel-info {
+.channel-info {
 	height: fit-content;
 	width: fit-content;
-	max-width: 100%;
+	max-width: 16em;
 
+	float: right;
+	position: absolute;
+	top: var(--channel-padding);
+	right: var(--channel-padding);
+	z-index: 1;
+
+	display: flex;
+	flex-direction: column;
+	gap: 0.5em;
+}
+
+.channel-info > * {
 	padding: 1em;
 
-	box-shadow: 4px 4px var(--channel-shadow);
+	box-shadow: var(--channel-shadow);
 	border-style: double;
 	background-color: var(--label-bg);
 }
 
- .channel-info > h1 {
+.channel-info > header > h1 {
 	margin: 0px;
+}
+
+.channel-info > .peer-list > :first-child {
+	margin-top: 0px;
+}
+
+.channel-info > .peer-list > :last-child {
+	margin-bottom: 0px;
 }
 
 .channel-content {
 	flex-grow: 1;
 	min-height: 0px;
 
+	padding: 2em 0px;
+
 
 	display: flex;
 	flex-direction: column;
+	gap: 1.5em;
 	overflow: scroll;
-	row-gap: 1em;
 }
 
 .message {
+	--message-gap: 0.5em;
+
 	box-sizing: border-box;
 	width: fit-content;
-	max-width: 100%;
 
 	display: flex;
 	flex-direction: column;
 	justify-content: left;
-}
+	gap: var(--message-gap);
 
-.message > * {
-	box-shadow: var(--msg-shadow) 4px 4px;
-	background-color: var(--msg-bg);
+	max-width: 48em;
 }
 
 .message > address {
-	display: block flex;
 	box-sizing: border-box;
 
+	display: block flex;
 	flex-direction: row;
-	gap: 1em;
+	flex-wrap: wrap;
+	align-items: end;
 
+	min-width: 0px;
+	min-height: 0px;
 	width: fit-content;
+	height: fit-content;
 	margin: 0px;
-	padding: 0.5em;
+}
 
-	border-style: double double none double;
+.message > address > * {
+	/* border: double; */
+	box-shadow: var(--msg-shadow);
+	background-color: var(--msg-bg);
 }
 
 .message > address > h1 {
+	width: fit-content;
+	height: fit-content;
 	margin: 0px;
+	padding: 0.5em;
+
+	text-align: center;
+
+	border-style: double double double none;
+}
+
+.message > address > img {
+	box-sizing: border-box;
+	max-width: 4em;
+	height: 4em;
+	padding: 2px;
+
+	object-fit: contain;
+
+	border: double;
 }
 
 .message > .message-content {
 	box-sizing: border-box;
 	border: double;
 
-	padding: 1em;
+	padding: 0px 1em;
+
+	width: fit-content;
+	height: fit-content;
+
+	overflow: scroll;
+
+	box-shadow: var(--msg-shadow);
+	background-color: var(--msg-bg);
 }
 
-.message-input {
+.message-content {
+	contain: content;
+	content-visibility: auto
+}
+
+.channel-input {
 	box-sizing: border-box;
 
 	display: block flex;
 	justify-content: end;
+
+	box-shadow: var(--msg-shadow);
 }
 
-.message-input textarea {
+.channel-input textarea, .channel-input input[type="text"] {
 	width: 100%;
 
 	resize: none;
 
 	border-radius: 0px;
-	border-style: inset;
+	border-style: double;
 	border-width: medium;
 	background-color: var(--interface-bg);
-	/* box-shadow: 4px 4px var(--interface-shadow) inset; */
-}
-
-
-footer {
 }
