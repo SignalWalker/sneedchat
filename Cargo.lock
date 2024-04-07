@@ -5132,23 +5132,6 @@ dependencies = [
 name = "troposphere"
 version = "0.1.0"
 dependencies = [
- "dashmap",
- "ed25519-dalek",
- "futures",
- "parking_lot",
- "rand 0.8.5",
- "rexa",
- "syrup",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "troposphere-gui"
-version = "0.1.0"
-dependencies = [
  "base64 0.22.0",
  "clap",
  "dashmap",
@@ -5179,10 +5162,27 @@ dependencies = [
  "toml 0.8.12",
  "tracing",
  "tracing-subscriber",
- "troposphere",
+ "troposphere-lib",
  "wasm-bindgen",
  "web-sys",
  "wry",
+]
+
+[[package]]
+name = "troposphere-lib"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "ed25519-dalek",
+ "futures",
+ "parking_lot",
+ "rand 0.8.5",
+ "rexa",
+ "syrup",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

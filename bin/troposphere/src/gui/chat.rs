@@ -15,7 +15,7 @@ use rexa::{
     locator::{NodeLocator, SturdyRefLocator},
 };
 use tokio::{sync::mpsc, task::JoinSet};
-use troposphere::{
+use troposphere_lib::{
     Channel, ChannelEvent, ChannelId, ChannelInfo, ChannelListing, ChatEvent, ChatManager, Message,
     NetlayerManager, PeerKey, Profile, RemotePortal, RemotePortalError, UserId,
 };
@@ -316,7 +316,7 @@ mod _channel_state {
 
     use parking_lot::RwLock;
     use tokio::sync::{mpsc, Notify};
-    use troposphere::{Channel, Message, PeerKey, Profile};
+    use troposphere_lib::{Channel, Message, PeerKey, Profile};
 
     use super::ChannelCommand;
 

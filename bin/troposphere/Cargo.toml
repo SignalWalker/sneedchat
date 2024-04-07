@@ -1,5 +1,5 @@
 [package]
-name = "troposphere-gui"
+name = "troposphere"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 license-file.workspace = true
 
 [dependencies]
-troposphere = { path = "../../lib/troposphere" }
+troposphere-lib = { path = "../../lib/troposphere-lib" }
 
 serde = { version = "^1", features = ["derive"] }
 

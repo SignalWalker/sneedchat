@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use pulldown_cmark::Parser;
 use rexa::{captp::RemoteKey, locator::NodeLocator};
 use tokio::sync::mpsc;
-use troposphere::{ChannelId, ChannelListing, RemotePortal};
+use troposphere_lib::{ChannelId, ChannelListing, RemotePortal};
 
 use crate::{
     cfg::Config,

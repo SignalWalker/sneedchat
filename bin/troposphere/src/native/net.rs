@@ -57,7 +57,7 @@ use futures::StreamExt;
 use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
 use rexa::{captp::RemoteKey, locator::NodeLocator};
 use tokio::task::JoinSet;
-use troposphere::PeerKey;
+use troposphere_lib::PeerKey;
 
 use std::{
     collections::{HashMap, HashSet},

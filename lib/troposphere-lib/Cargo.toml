@@ -1,5 +1,5 @@
 [package]
-name = "troposphere"
+name = "troposphere-lib"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -32,4 +32,3 @@ tokio = { workspace = true, features = [] }
 
 [lints]
 workspace = true
-
