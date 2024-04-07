@@ -1,0 +1,69 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.forgejo/workflows/rust.yml'
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  # pull_request:
+  #   paths:
+  #     - '.forgejo/workflows/rust.yml'
+  #     - '**/*.rs'
+  #     - '**/Cargo.toml'
+  #     - '**/Cargo.lock'
+
+env:
+  CARGO_NET_RETRY: 10
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  rust:
+    name: Check & Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: true
+      # matrix:
+      #   # os: [ubuntu-latest, macos-latest, windows-latest]
+      #   rust: [stable, nightly]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Install Rust Toolchain
+        uses: https://github.com/actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
+      - name: Cache Dependencies
+        uses: https://github.com/swatinem/rust-cache@v2
+      - name: Format
+        uses: https://github.com/actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+      - name: Clippy
+        uses: https://github.com/actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features --all-targets --profile ci --workspace --no-deps  -- -W missing_docs
+      - name: Compile
+        uses: https://github.com/actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features --all-targets --profile ci --workspace --no-run
+      - name: Test
+        uses: https://github.com/actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features --all-targets --profile ci --workspace --quiet

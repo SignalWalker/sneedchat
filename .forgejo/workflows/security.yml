@@ -1,0 +1,32 @@
+name: Security audit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.forgejo/workflows/security.yml'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  # pull_request:
+  #   paths:
+  #     - '.forgejo/workflows/security.yml'
+  #     - '**/Cargo.toml'
+  #     - '**/Cargo.lock'
+
+jobs:
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: https://github.com/actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+      - uses: https://github.com/swatinem/rust-cache@v2
+      - uses: https://github.com/actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
